@@ -1,0 +1,25 @@
+{
+  "taskID": "todo-001",
+  "manifest": {
+    "site": "",
+    "title": "ok",
+    "primaryURL": "https://example.com",
+    "assetCount": 0,
+    "blocked": false
+  },
+  "state": "completed",
+  "verification": "completed",
+  "outputRoot": "runtime\\output",
+  "thumbnailRoot": "runtime\\thumbnails",
+  "thumbnailPath": ".",
+  "statePath": "runtime\\comic_downloader_state.json",
+  "reportPath": "runtime\\tasks\\task-todo-001\\report.json",
+  "logPath": "runtime\\logs\\task-todo_001.log",
+  "storageState": "",
+  "verificationState": "",
+  "initScript": "",
+  "createdAt": "2026-04-27T06:55:23.820659Z",
+  "startedAt": "2026-04-27T06:55:23.820659Z",
+  "finishedAt": "2026-04-27T06:55:23.820659Z",
+  "lastError": ""
+}

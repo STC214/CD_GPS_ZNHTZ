@@ -1,0 +1,27 @@
+{
+  "taskID": "todo-002",
+  "manifest": {
+    "site": "",
+    "title": "Comic B",
+    "primaryURL": "https://example.com/b",
+    "assetCount": 1,
+    "blocked": false
+  },
+  "state": "completed",
+  "verification": "completed",
+  "browserType": "firefox",
+  "pageType": "content",
+  "outputRoot": "F:\\downloads\\comic-b",
+  "thumbnailRoot": "F:\\thumbs",
+  "thumbnailPath": "F:\\thumbs\\b.jpg",
+  "statePath": "runtime\\comic_downloader_state.json",
+  "reportPath": "runtime\\tasks\\task-todo-002\\report.json",
+  "logPath": "runtime\\logs\\task-todo_002.log",
+  "storageState": "",
+  "verificationState": "",
+  "initScript": "",
+  "createdAt": "2026-04-27T06:55:23.6463506Z",
+  "startedAt": "2026-04-27T06:55:23.6463506Z",
+  "finishedAt": "2026-04-27T06:55:23.6463506Z",
+  "lastError": ""
+}
