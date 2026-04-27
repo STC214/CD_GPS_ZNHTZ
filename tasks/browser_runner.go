@@ -16,6 +16,7 @@ import (
 	"comic_downloader_go_playwright_stealth/siteflow/assets"
 	"comic_downloader_go_playwright_stealth/siteflow/hentai2"
 	"comic_downloader_go_playwright_stealth/siteflow/hentaiaz"
+	"comic_downloader_go_playwright_stealth/siteflow/hitomi"
 	"comic_downloader_go_playwright_stealth/siteflow/nyahentai"
 	"comic_downloader_go_playwright_stealth/siteflow/zeri"
 )
@@ -66,11 +67,15 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 		stopCancelWatcher()
 		return BrowserRunResult{}, fmt.Errorf("browser url is empty")
 	}
+	runtimePaths := projectruntime.NewPathsFromRuntimeRoot(req.RuntimeRoot)
+	if hitomi.IsHitomiURL(req.URL) {
+		defer stopCancelWatcher()
+		return runHitomiRequest(ctx, req, runtimePaths)
+	}
 	log.Printf("browser request start: type=%s headless=%t keepOpen=%t url=%s output=%s profile=%s driver=%s",
 		req.BrowserType, req.Headless, req.KeepOpen, req.URL, req.OutputDir, req.ProfileDir, req.DriverDir)
 
 	manager := projectruntime.NewBrowserProfileManager(workspaceRootFromRuntimeRoot(req.RuntimeRoot))
-	runtimePaths := projectruntime.NewPathsFromRuntimeRoot(req.RuntimeRoot)
 	var cleanupProfile func()
 	activeProfileDir := ""
 
@@ -272,6 +277,59 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 		DownloadedBytes:      downloadResult.Bytes,
 		DownloadedDir:        downloadResult.OutputDir,
 		ThumbnailPath:        thumbnailPath,
+	}, nil
+}
+
+func runHitomiRequest(ctx context.Context, req BrowserLaunchRequest, runtimePaths projectruntime.Paths) (BrowserRunResult, error) {
+	log.Printf("hitomi request start: url=%s output=%s", req.URL, req.OutputDir)
+	if req.Progress != nil {
+		req.Progress(zeri.DownloadProgress{Fraction: 0.02, Phase: "start", Message: "hitomi"})
+	}
+	hitomiResult, err := hitomi.ExecuteWithProgress(ctx, req.URL, progressSpan(req.Progress, 0.02, 0.08))
+	if err != nil {
+		return BrowserRunResult{}, err
+	}
+	imageURLs := hitomiResult.CollectedImages
+	if len(imageURLs) == 0 {
+		return BrowserRunResult{}, fmt.Errorf("hitomi target images not found")
+	}
+	assetSummary := assets.CollectionSummary{
+		Site:      "hitomi",
+		BaseURL:   hitomiResult.FinalURL,
+		Title:     hitomiResult.FinalTitle,
+		PageCount: hitomiResult.PageCount,
+		ReaderURL: hitomiResult.FinalURL,
+	}
+	var downloadResult assets.DownloadResult
+	var thumbnailPath string
+	if strings.TrimSpace(req.OutputDir) != "" {
+		downloadResult, thumbnailPath, err = downloadAndThumbnail(ctx, runtimePaths, req, assetSummary, imageURLs)
+		if err != nil {
+			return BrowserRunResult{}, err
+		}
+	}
+	return BrowserRunResult{
+		URL:                 req.URL,
+		ResolvedURL:         hitomiResult.FinalURL,
+		Title:               hitomiResult.FinalTitle,
+		BrowserType:         req.BrowserType,
+		BrowserMode:         "http",
+		Headless:            req.Headless,
+		KeepOpen:            false,
+		Site:                "hitomi",
+		PageType:            "content",
+		ReaderURL:           hitomiResult.FinalURL,
+		SummaryPageCount:    hitomiResult.PageCount,
+		ReaderPageCount:     hitomiResult.PageCount,
+		ReaderImageCount:    len(imageURLs),
+		ReaderFilteredCount: len(imageURLs),
+		Verified:            true,
+		VerificationNeeded:  false,
+		Blocked:             false,
+		DownloadedCount:     len(downloadResult.Files),
+		DownloadedBytes:     downloadResult.Bytes,
+		DownloadedDir:       downloadResult.OutputDir,
+		ThumbnailPath:       thumbnailPath,
 	}, nil
 }
 

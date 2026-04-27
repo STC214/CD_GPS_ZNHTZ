@@ -22,6 +22,9 @@
 # Local adblock refresh state
 /adblock/state.json
 
+# Local reference repositories
+/references/hitomi-downloader/
+
 # Logs and temporary files
 *.log
 *.tmp

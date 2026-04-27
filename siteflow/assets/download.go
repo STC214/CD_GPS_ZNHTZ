@@ -15,10 +15,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 )
 
 const maxDownloadWorkers = 7
+const defaultImageDownloadAttempts = 4
+const hitomiImageDownloadAttempts = 20
 
 // CollectionSummary is the site-neutral metadata needed to name a download batch.
 type CollectionSummary struct {
@@ -210,13 +213,9 @@ func downloadOneImage(ctx context.Context, rawURL, outputDir string, index int, 
 		return "", 0, fmt.Errorf("parse image url %q: %w", rawURL, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	resp, err := downloadImageResponse(ctx, rawURL, parsed)
 	if err != nil {
-		return "", 0, fmt.Errorf("create image request %q: %w", rawURL, err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", 0, fmt.Errorf("download image %q: %w", rawURL, err)
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -230,6 +229,9 @@ func downloadOneImage(ctx context.Context, rawURL, outputDir string, index int, 
 	}
 	if ext == "" {
 		ext = ".jpg"
+	}
+	if needsHitomiReferer(parsed) {
+		baseName = fmt.Sprintf("%04d", index)
 	}
 
 	usedNamesMu.Lock()
@@ -248,6 +250,77 @@ func downloadOneImage(ctx context.Context, rawURL, outputDir string, index int, 
 		return "", 0, fmt.Errorf("write image file %q: %w", targetPath, err)
 	}
 	return targetPath, written, nil
+}
+
+func downloadImageResponse(ctx context.Context, rawURL string, parsed *url.URL) (*http.Response, error) {
+	attempts := defaultImageDownloadAttempts
+	hitomiCDN := needsHitomiReferer(parsed)
+	if hitomiCDN {
+		attempts = hitomiImageDownloadAttempts
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create image request %q: %w", rawURL, err)
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		if hitomiCDN {
+			req.Header.Set("Referer", "https://hitomi.la/")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("download image %q: %w", rawURL, err)
+			if attempt < attempts {
+				sleepBeforeImageRetry(ctx, attempt)
+				continue
+			}
+			return nil, lastErr
+		}
+		if !retryableImageStatus(resp.StatusCode) || attempt >= attempts {
+			return resp, nil
+		}
+		lastErr = fmt.Errorf("download image %q: unexpected status %s", rawURL, resp.Status)
+		_ = resp.Body.Close()
+		sleepBeforeImageRetry(ctx, attempt)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("download image %q failed", rawURL)
+	}
+	return nil, lastErr
+}
+
+func retryableImageStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func sleepBeforeImageRetry(ctx context.Context, attempt int) {
+	delay := time.Duration(250*attempt) * time.Millisecond
+	if delay > 3*time.Second {
+		delay = 3 * time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func needsHitomiReferer(parsed *url.URL) bool {
+	if parsed == nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return strings.Contains(host, "gold-usergeneratedcontent.net") || strings.Contains(host, "hitomi.la")
 }
 
 func uniqueDownloadFilename(baseName, ext string, index int, usedNames map[string]int) string {

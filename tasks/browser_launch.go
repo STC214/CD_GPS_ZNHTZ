@@ -12,6 +12,7 @@ import (
 	projectruntime "comic_downloader_go_playwright_stealth/runtime"
 	"comic_downloader_go_playwright_stealth/siteflow/hentai2"
 	"comic_downloader_go_playwright_stealth/siteflow/hentaiaz"
+	"comic_downloader_go_playwright_stealth/siteflow/hitomi"
 	"comic_downloader_go_playwright_stealth/siteflow/nyahentai"
 	"comic_downloader_go_playwright_stealth/siteflow/zeri"
 )
@@ -75,7 +76,7 @@ func (r BrowserLaunchRequest) Normalize() BrowserLaunchRequest {
 	}
 	r.URL = NormalizeTaskURL(r.URL)
 	r.BrowserType = normalizeBrowserType(r.BrowserType)
-	if zeri.IsZeriURL(r.URL) || hentai2.IsHentai2URL(r.URL) || hentaiaz.IsHentaiazURL(r.URL) || nyahentai.IsNyahentaiURL(r.URL) {
+	if zeri.IsZeriURL(r.URL) || hentai2.IsHentai2URL(r.URL) || hentaiaz.IsHentaiazURL(r.URL) || nyahentai.IsNyahentaiURL(r.URL) || hitomi.IsHitomiURL(r.URL) {
 		r.BrowserType = string(projectruntime.BrowserTypeFirefox)
 	}
 	r.BrowserInstallDir = strings.TrimSpace(r.BrowserInstallDir)
