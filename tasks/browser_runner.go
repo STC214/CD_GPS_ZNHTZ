@@ -1,17 +1,22 @@
 package tasks
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	projectruntime "comic_downloader_go_playwright_stealth/runtime"
 	"comic_downloader_go_playwright_stealth/siteflow/assets"
 	"comic_downloader_go_playwright_stealth/siteflow/hentai2"
+	"comic_downloader_go_playwright_stealth/siteflow/hentaiaz"
+	"comic_downloader_go_playwright_stealth/siteflow/nyahentai"
 	"comic_downloader_go_playwright_stealth/siteflow/zeri"
 )
 
@@ -48,7 +53,17 @@ type BrowserRunResult struct {
 // RunBrowserRequest opens the page described by the request and returns a normalized result.
 func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 	req = req.Normalize()
+	ctx := req.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, stopCancelWatcher := context.WithCancel(ctx)
+	if err := ctx.Err(); err != nil {
+		stopCancelWatcher()
+		return BrowserRunResult{}, err
+	}
 	if strings.TrimSpace(req.URL) == "" {
+		stopCancelWatcher()
 		return BrowserRunResult{}, fmt.Errorf("browser url is empty")
 	}
 	log.Printf("browser request start: type=%s headless=%t keepOpen=%t url=%s output=%s profile=%s driver=%s",
@@ -61,6 +76,7 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 
 	profile, err := manager.PrepareFreshPlaywrightProfile(projectruntime.BrowserType(req.BrowserType))
 	if err != nil {
+		stopCancelWatcher()
 		return BrowserRunResult{}, err
 	}
 	req.UserDataDir = absolutePathOrClean(profile.RootDir)
@@ -85,13 +101,29 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 		if cleanupProfile != nil {
 			cleanupProfile()
 		}
+		stopCancelWatcher()
 		return BrowserRunResult{}, err
 	}
 	if req.Progress != nil {
 		req.Progress(zeri.DownloadProgress{Fraction: 0.08, Phase: "start", Message: "ready"})
 	}
+	var closeOnce sync.Once
+	closeSession := func() {
+		closeOnce.Do(func() {
+			_ = session.Close()
+		})
+	}
+	cancelWatcherDone := make(chan struct{})
+	go func() {
+		defer close(cancelWatcherDone)
+		<-ctx.Done()
+		log.Printf("browser request canceled: task=%s url=%s; closing session", req.TaskID, req.URL)
+		closeSession()
+	}()
 	defer func() {
-		_ = session.Close()
+		stopCancelWatcher()
+		closeSession()
+		<-cancelWatcherDone
 		if cleanupProfile != nil {
 			cleanupProfile()
 		}
@@ -99,6 +131,8 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 
 	var zeriResult zeri.ExecutionResult
 	var hentai2Result hentai2.ExecutionResult
+	var hentaiazResult hentaiaz.ExecutionResult
+	var nyahentaiResult nyahentai.ExecutionResult
 	var downloadResult assets.DownloadResult
 	var thumbnailPath string
 	var assetSummary assets.CollectionSummary
@@ -106,6 +140,9 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 	site := ""
 	if zeri.IsZeriURL(req.URL) {
 		site = "zeri"
+		if err := ctx.Err(); err != nil {
+			return BrowserRunResult{}, err
+		}
 		if req.Progress != nil {
 			req.Progress(zeri.DownloadProgress{Fraction: 0.10, Phase: "parse", Message: "summary"})
 		}
@@ -123,6 +160,9 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 		imageURLs = zeriResult.CollectedImages
 	} else if hentai2.IsHentai2URL(req.URL) {
 		site = "hentai2"
+		if err := ctx.Err(); err != nil {
+			return BrowserRunResult{}, err
+		}
 		if req.Progress != nil {
 			req.Progress(zeri.DownloadProgress{Fraction: 0.10, Phase: "parse", Message: "summary"})
 		}
@@ -138,9 +178,55 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 			ReaderURL: hentai2Result.Summary.ReaderURL,
 		}
 		imageURLs = hentai2Result.CollectedImages
+	} else if hentaiaz.IsHentaiazURL(req.URL) {
+		site = "hentaiaz"
+		if err := ctx.Err(); err != nil {
+			return BrowserRunResult{}, err
+		}
+		if req.Progress != nil {
+			req.Progress(zeri.DownloadProgress{Fraction: 0.10, Phase: "parse", Message: "summary"})
+		}
+		hentaiazResult, err = hentaiaz.ExecuteWithProgress(session, req.URL, progressSpan(req.Progress, 0.10, 0.90))
+		if err != nil {
+			return BrowserRunResult{}, err
+		}
+		assetSummary = assets.CollectionSummary{
+			Site:      site,
+			BaseURL:   hentaiazResult.Summary.BaseURL,
+			Title:     hentaiazResult.Summary.Title,
+			PageCount: hentaiazResult.Summary.PageCount,
+			ReaderURL: hentaiazResult.Summary.ReaderURL,
+		}
+		imageURLs = hentaiazResult.CollectedImages
+	} else if nyahentai.IsNyahentaiURL(req.URL) {
+		site = "nyahentai"
+		if err := ctx.Err(); err != nil {
+			return BrowserRunResult{}, err
+		}
+		if req.Progress != nil {
+			req.Progress(zeri.DownloadProgress{Fraction: 0.10, Phase: "parse", Message: "reader"})
+		}
+		nyahentaiResult, err = nyahentai.ExecuteWithProgress(session, req.URL, progressSpan(req.Progress, 0.10, 0.90))
+		if err != nil {
+			return BrowserRunResult{}, err
+		}
+		assetSummary = assets.CollectionSummary{
+			Site:      site,
+			BaseURL:   nyahentaiResult.Reader.BaseURL,
+			Title:     nyahentaiResult.Reader.Title,
+			PageCount: nyahentaiResult.PageCount,
+			ReaderURL: nyahentaiResult.Reader.URL,
+		}
+		imageURLs = nyahentaiResult.CollectedImages
 	}
-	if site != "" && strings.TrimSpace(req.OutputDir) != "" && len(imageURLs) > 0 {
-		downloadResult, thumbnailPath, err = downloadAndThumbnail(runtimePaths, req, assetSummary, imageURLs)
+	if site != "" && len(imageURLs) == 0 {
+		return BrowserRunResult{}, fmt.Errorf("%s target images not found", site)
+	}
+	if err := ctx.Err(); err != nil {
+		return BrowserRunResult{}, err
+	}
+	if site != "" && strings.TrimSpace(req.OutputDir) != "" {
+		downloadResult, thumbnailPath, err = downloadAndThumbnail(ctx, runtimePaths, req, assetSummary, imageURLs)
 		if err != nil {
 			return BrowserRunResult{}, err
 		}
@@ -150,8 +236,11 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 		log.Printf("session title lookup failed: %v", err)
 		title = req.URL
 	}
+	if siteTitle := resultFinalTitle(zeriResult, hentai2Result, hentaiazResult, nyahentaiResult); strings.TrimSpace(siteTitle) != "" {
+		title = siteTitle
+	}
 	if req.KeepOpen {
-		if err := waitForBrowserCloseOrSignal(session); err != nil {
+		if err := waitForBrowserCloseOrSignal(ctx, session); err != nil {
 			return BrowserRunResult{}, err
 		}
 	}
@@ -168,11 +257,11 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 		PlaywrightProfileDir: req.UserDataDir,
 		Site:                 site,
 		PageType:             "content",
-		ReaderURL:            resultReaderURL(zeriResult, hentai2Result),
-		SummaryPageCount:     resultSummaryPageCount(zeriResult, hentai2Result),
-		ReaderPageCount:      resultReaderPageCount(zeriResult, hentai2Result),
-		ReaderImageCount:     resultReaderImageCount(zeriResult, hentai2Result),
-		ReaderFilteredCount:  resultReaderFilteredCount(zeriResult, hentai2Result),
+		ReaderURL:            resultReaderURL(zeriResult, hentai2Result, hentaiazResult, nyahentaiResult),
+		SummaryPageCount:     resultSummaryPageCount(zeriResult, hentai2Result, hentaiazResult, nyahentaiResult),
+		ReaderPageCount:      resultReaderPageCount(zeriResult, hentai2Result, hentaiazResult, nyahentaiResult),
+		ReaderImageCount:     resultReaderImageCount(zeriResult, hentai2Result, hentaiazResult, nyahentaiResult),
+		ReaderFilteredCount:  resultReaderFilteredCount(zeriResult, hentai2Result, hentaiazResult, nyahentaiResult),
 		ReaderActivation:     zeriResult.ActivationClicks,
 		Verified:             true,
 		VerificationNeeded:   false,
@@ -194,7 +283,7 @@ func openTaskBrowserSession(req BrowserLaunchRequest) (taskBrowserSession, error
 	return session, nil
 }
 
-func downloadAndThumbnail(runtimePaths projectruntime.Paths, req BrowserLaunchRequest, summary assets.CollectionSummary, imageURLs []string) (assets.DownloadResult, string, error) {
+func downloadAndThumbnail(ctx context.Context, runtimePaths projectruntime.Paths, req BrowserLaunchRequest, summary assets.CollectionSummary, imageURLs []string) (assets.DownloadResult, string, error) {
 	downloadWeight := zeri.DownloadWeightForCount(summary.PageCount)
 	parseWeight := 1 - downloadWeight
 	if parseWeight < 0 {
@@ -203,7 +292,8 @@ func downloadAndThumbnail(runtimePaths projectruntime.Paths, req BrowserLaunchRe
 	downloadStart := 0.10 + 0.90*parseWeight
 	downloadSpan := 0.90 * downloadWeight
 
-	downloadResult, err := assets.DownloadImages(
+	downloadResult, err := assets.DownloadImagesContext(
+		ctx,
 		summary,
 		imageURLs,
 		req.OutputDir,
@@ -257,35 +347,79 @@ func assetProgressSpan(cb func(zeri.DownloadProgress), start, span float64) asse
 	}
 }
 
-func resultReaderURL(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult) string {
+func resultFinalTitle(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult, hentaiazResult hentaiaz.ExecutionResult, nyahentaiResult nyahentai.ExecutionResult) string {
+	for _, title := range []string{
+		nyahentaiResult.FinalTitle,
+		hentaiazResult.FinalTitle,
+		hentai2Result.FinalTitle,
+		zeriResult.FinalTitle,
+	} {
+		if strings.TrimSpace(title) != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func resultReaderURL(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult, hentaiazResult hentaiaz.ExecutionResult, nyahentaiResult nyahentai.ExecutionResult) string {
+	if strings.TrimSpace(nyahentaiResult.Reader.URL) != "" {
+		return nyahentaiResult.Reader.URL
+	}
+	if strings.TrimSpace(hentaiazResult.Reader.URL) != "" {
+		return hentaiazResult.Reader.URL
+	}
 	if strings.TrimSpace(hentai2Result.Reader.URL) != "" {
 		return hentai2Result.Reader.URL
 	}
 	return zeriResult.Reader.URL
 }
 
-func resultSummaryPageCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult) int {
+func resultSummaryPageCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult, hentaiazResult hentaiaz.ExecutionResult, nyahentaiResult nyahentai.ExecutionResult) int {
+	if nyahentaiResult.PageCount > 0 {
+		return nyahentaiResult.PageCount
+	}
+	if hentaiazResult.Summary.PageCount > 0 {
+		return hentaiazResult.Summary.PageCount
+	}
 	if hentai2Result.Summary.PageCount > 0 {
 		return hentai2Result.Summary.PageCount
 	}
 	return zeriResult.Summary.PageCount
 }
 
-func resultReaderPageCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult) int {
+func resultReaderPageCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult, hentaiazResult hentaiaz.ExecutionResult, nyahentaiResult nyahentai.ExecutionResult) int {
+	if nyahentaiResult.PageCount > 0 {
+		return nyahentaiResult.PageCount
+	}
+	if hentaiazResult.Summary.PageCount > 0 {
+		return hentaiazResult.Summary.PageCount
+	}
 	if hentai2Result.Summary.PageCount > 0 {
 		return hentai2Result.Summary.PageCount
 	}
 	return zeriResult.Reader.PageCount
 }
 
-func resultReaderImageCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult) int {
+func resultReaderImageCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult, hentaiazResult hentaiaz.ExecutionResult, nyahentaiResult nyahentai.ExecutionResult) int {
+	if len(nyahentaiResult.Reader.ImageURLs) > 0 {
+		return len(nyahentaiResult.Reader.ImageURLs)
+	}
+	if len(hentaiazResult.Reader.ImageURLs) > 0 {
+		return len(hentaiazResult.Reader.ImageURLs)
+	}
 	if len(hentai2Result.Reader.ImageURLs) > 0 {
 		return len(hentai2Result.Reader.ImageURLs)
 	}
 	return len(zeriResult.Reader.ImageURLs)
 }
 
-func resultReaderFilteredCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult) int {
+func resultReaderFilteredCount(zeriResult zeri.ExecutionResult, hentai2Result hentai2.ExecutionResult, hentaiazResult hentaiaz.ExecutionResult, nyahentaiResult nyahentai.ExecutionResult) int {
+	if len(nyahentaiResult.CollectedImages) > 0 {
+		return len(nyahentaiResult.CollectedImages)
+	}
+	if len(hentaiazResult.CollectedImages) > 0 {
+		return len(hentaiazResult.CollectedImages)
+	}
 	if len(hentai2Result.CollectedImages) > 0 {
 		return len(hentai2Result.CollectedImages)
 	}
@@ -332,7 +466,10 @@ func progressSpan(cb func(zeri.DownloadProgress), start, span float64) func(zeri
 	}
 }
 
-func waitForBrowserCloseOrSignal(session taskBrowserSession) error {
+func waitForBrowserCloseOrSignal(ctx context.Context, session taskBrowserSession) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	waitErr := make(chan error, 1)
 	go func() {
 		waitErr <- session.WaitClosed()
@@ -345,6 +482,13 @@ func waitForBrowserCloseOrSignal(session taskBrowserSession) error {
 	select {
 	case err := <-waitErr:
 		return err
+	case <-ctx.Done():
+		log.Printf("browser session canceled; closing browser and cleaning task temp files")
+		_ = session.Close()
+		if err := <-waitErr; err != nil && !errors.Is(ctx.Err(), context.Canceled) {
+			return err
+		}
+		return ctx.Err()
 	case sig := <-sigCh:
 		log.Printf("browser session interrupted by %s; closing browser and cleaning task temp files", sig)
 		_ = session.Close()

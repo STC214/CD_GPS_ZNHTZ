@@ -1,11 +1,11 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,11 +62,12 @@ type TodoList struct {
 	progressNotifyAt  time.Time
 	progressNotifyRun bool
 	progressDelay     time.Duration
+	activeCancels     map[string]context.CancelFunc
 }
 
 // NewTodoList builds an empty todo list.
 func NewTodoList() *TodoList {
-	l := &TodoList{maxParallel: 1, progressDelay: 80 * time.Millisecond}
+	l := &TodoList{maxParallel: 1, progressDelay: 80 * time.Millisecond, activeCancels: map[string]context.CancelFunc{}}
 	l.cond = sync.NewCond(&l.mu)
 	return l
 }
@@ -243,6 +244,10 @@ func (l *TodoList) RemoveByIDs(ids []string) int {
 	removed := 0
 	for _, item := range l.items {
 		if _, ok := idSet[item.ID]; ok {
+			if todoStatusIsActive(item.Status) {
+				kept = append(kept, item)
+				continue
+			}
 			removed++
 			continue
 		}
@@ -276,6 +281,9 @@ func (l *TodoList) SetStatusByIDs(ids []string, status TodoStatus, phase string)
 	for i, item := range l.items {
 		if _, ok := idSet[item.ID]; !ok {
 			continue
+		}
+		if item.Status == TodoStatusRunning && status != TodoStatusRunning {
+			l.cancelActiveLocked(item.ID)
 		}
 		item.Status = status
 		if strings.TrimSpace(phase) != "" {
@@ -484,6 +492,8 @@ func (l *TodoList) RunImmediately(req tasks.BrowserLaunchRequest, runner TodoRun
 
 	l.acquireRunSlot()
 	defer l.releaseRunSlot()
+	req, cancel := l.requestWithCancel(item.ID, req)
+	defer l.unregisterActiveCancel(item.ID, cancel)
 	if err := l.updateTaskStatus(item.ID, func(task *TodoItem) {
 		task.Status = TodoStatusRunning
 		task.Phase = "running"
@@ -504,6 +514,21 @@ func (l *TodoList) RunImmediately(req tasks.BrowserLaunchRequest, runner TodoRun
 	}
 	item = l.items[index]
 	item.FinishedAt = time.Now().UTC()
+	if item.Status != TodoStatusRunning {
+		if err != nil {
+			item.LastError = err.Error()
+			item.StepMessage = err.Error()
+		}
+		l.items[index] = item
+		l.mu.Unlock()
+		if notifier != nil {
+			notifier()
+		}
+		if err := SaveTaskReport(req.RuntimeRoot, item); err != nil {
+			log.Printf("save task report failed: %v", err)
+		}
+		return item, err
+	}
 	if err != nil {
 		item.Status = TodoStatusFailed
 		item.Progress = 1
@@ -576,22 +601,22 @@ func (l *TodoList) StartAllUnfinishedWithConcurrency(workspaceRoot string, maxPa
 
 func (l *TodoList) startAllPending(maxParallel int, runner TodoRunner) ([]TodoItem, error) {
 	l.mu.Lock()
-	indices := make([]int, 0, len(l.items))
-	for i, item := range l.items {
+	ids := make([]string, 0, len(l.items))
+	for _, item := range l.items {
 		if todoStatusIsRestartable(item.Status) {
-			indices = append(indices, i)
+			ids = append(ids, item.ID)
 		}
 	}
 	l.mu.Unlock()
 
-	results := make([]TodoItem, 0, len(indices))
+	results := make([]TodoItem, 0, len(ids))
 	var runErr error
 	if maxParallel <= 0 {
 		maxParallel = 1
 	}
 	if maxParallel == 1 {
-		for _, index := range indices {
-			item, err := l.runPendingItem(index, runner)
+		for _, id := range ids {
+			item, err := l.runPendingItem(id, runner)
 			results = append(results, item)
 			if err != nil {
 				if runErr == nil {
@@ -607,14 +632,14 @@ func (l *TodoList) startAllPending(maxParallel int, runner TodoRunner) ([]TodoIt
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	var resultsMu sync.Mutex
-	for _, index := range indices {
-		index := index
+	for _, id := range ids {
+		id := id
 		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			item, err := l.runPendingItem(index, runner)
+			item, err := l.runPendingItem(id, runner)
 			resultsMu.Lock()
 			results = append(results, item)
 			if err != nil {
@@ -647,11 +672,21 @@ func todoStatusIsRestartable(status TodoStatus) bool {
 	}
 }
 
-func (l *TodoList) runPendingItem(index int, runner TodoRunner) (TodoItem, error) {
+func todoStatusIsActive(status TodoStatus) bool {
+	switch status {
+	case TodoStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+func (l *TodoList) runPendingItem(itemID string, runner TodoRunner) (TodoItem, error) {
 	l.mu.Lock()
-	if index < 0 || index >= len(l.items) {
+	index, ok := l.findItemIndexByIDLocked(itemID)
+	if !ok {
 		l.mu.Unlock()
-		return TodoItem{}, fmt.Errorf("todo index %d out of range", index)
+		return TodoItem{}, nil
 	}
 	item := l.items[index]
 	item.Status = TodoStatusQueued
@@ -678,6 +713,13 @@ func (l *TodoList) runPendingItem(index int, runner TodoRunner) (TodoItem, error
 
 	l.acquireRunSlot()
 	defer l.releaseRunSlot()
+	if item, ok, err := l.itemBeforeRun(item.ID); err != nil || !ok {
+		return item, err
+	} else if item.Status == TodoStatusPaused {
+		return item, nil
+	}
+	req, cancel := l.requestWithCancel(item.ID, req)
+	defer l.unregisterActiveCancel(item.ID, cancel)
 	if err := l.updateTaskStatus(item.ID, func(task *TodoItem) {
 		task.Status = TodoStatusRunning
 		task.Phase = "running"
@@ -691,13 +733,28 @@ func (l *TodoList) runPendingItem(index int, runner TodoRunner) (TodoItem, error
 	result, err := runner(req)
 
 	l.mu.Lock()
-	index, ok := l.findItemIndexByIDLocked(item.ID)
+	index, ok = l.findItemIndexByIDLocked(item.ID)
 	if !ok {
 		l.mu.Unlock()
 		return TodoItem{}, fmt.Errorf("todo item %s not found after run", item.ID)
 	}
 	item = l.items[index]
 	item.FinishedAt = time.Now().UTC()
+	if item.Status != TodoStatusRunning {
+		if err != nil {
+			item.LastError = err.Error()
+			item.StepMessage = err.Error()
+		}
+		l.items[index] = item
+		l.mu.Unlock()
+		if notifier != nil {
+			notifier()
+		}
+		if err := SaveTaskReport(req.RuntimeRoot, item); err != nil {
+			log.Printf("save task report failed: %v", err)
+		}
+		return item, err
+	}
 	if err != nil {
 		item.Status = TodoStatusFailed
 		item.Progress = 1
@@ -769,6 +826,13 @@ func (l *TodoList) runExistingItem(itemID string, runner TodoRunner) (TodoItem, 
 
 	l.acquireRunSlot()
 	defer l.releaseRunSlot()
+	if item, ok, err := l.itemBeforeRun(item.ID); err != nil || !ok {
+		return item, err
+	} else if item.Status == TodoStatusPaused {
+		return item, nil
+	}
+	req, cancel := l.requestWithCancel(item.ID, req)
+	defer l.unregisterActiveCancel(item.ID, cancel)
 	if err := l.updateTaskStatus(item.ID, func(task *TodoItem) {
 		task.Status = TodoStatusRunning
 		task.Phase = "running"
@@ -789,6 +853,21 @@ func (l *TodoList) runExistingItem(itemID string, runner TodoRunner) (TodoItem, 
 	}
 	item = l.items[index]
 	item.FinishedAt = time.Now().UTC()
+	if item.Status != TodoStatusRunning {
+		if err != nil {
+			item.LastError = err.Error()
+			item.StepMessage = err.Error()
+		}
+		l.items[index] = item
+		l.mu.Unlock()
+		if notifier != nil {
+			notifier()
+		}
+		if err := SaveTaskReport(req.RuntimeRoot, item); err != nil {
+			log.Printf("save task report failed: %v", err)
+		}
+		return item, err
+	}
 	if err != nil {
 		item.Status = TodoStatusFailed
 		item.Progress = 1
@@ -824,6 +903,58 @@ func (l *TodoList) runExistingItem(itemID string, runner TodoRunner) (TodoItem, 
 		log.Printf("cleanup task log failed: %v", err)
 	}
 	return item, nil
+}
+
+func (l *TodoList) itemBeforeRun(itemID string) (TodoItem, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	index, ok := l.findItemIndexByIDLocked(itemID)
+	if !ok {
+		return TodoItem{}, false, nil
+	}
+	item := l.items[index]
+	switch item.Status {
+	case TodoStatusPaused:
+		item.Phase = "paused"
+		l.items[index] = item
+		return item, true, nil
+	case TodoStatusQueued, TodoStatusPending, TodoStatusFailed, TodoStatusWaitingVerification, TodoStatusVerificationCleared:
+		return item, true, nil
+	default:
+		return item, true, nil
+	}
+}
+
+func (l *TodoList) requestWithCancel(itemID string, req tasks.BrowserLaunchRequest) (tasks.BrowserLaunchRequest, context.CancelFunc) {
+	parent := req.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	req.Context = ctx
+	l.mu.Lock()
+	if l.activeCancels == nil {
+		l.activeCancels = map[string]context.CancelFunc{}
+	}
+	l.activeCancels[itemID] = cancel
+	l.mu.Unlock()
+	return req, cancel
+}
+
+func (l *TodoList) unregisterActiveCancel(itemID string, cancel context.CancelFunc) {
+	l.mu.Lock()
+	delete(l.activeCancels, itemID)
+	l.mu.Unlock()
+	cancel()
+}
+
+func (l *TodoList) cancelActiveLocked(itemID string) {
+	if l.activeCancels == nil {
+		return
+	}
+	if cancel := l.activeCancels[itemID]; cancel != nil {
+		cancel()
+	}
 }
 
 func (l *TodoList) acquireRunSlot() {
@@ -897,15 +1028,7 @@ func todoItemSortPriority(item TodoItem) int {
 }
 
 func todoItemNumber(id string) int {
-	id = strings.TrimSpace(id)
-	if !strings.HasPrefix(id, "todo-") {
-		return 0
-	}
-	n, err := strconv.Atoi(strings.TrimPrefix(id, "todo-"))
-	if err != nil {
-		return 0
-	}
-	return n
+	return todoItemSequence(id)
 }
 
 func (l *TodoList) makeProgressUpdater(itemID string) func(zeri.DownloadProgress) {

@@ -38,13 +38,15 @@ Covered packages include:
 - `siteflow/assets`: shared image downloading, thumbnail source selection, and JPG thumbnail creation.
 - `siteflow/zeri`: Zeri URL detection, summary parsing, reader parsing, pagination walking, and image URL collection.
 - `siteflow/hentai2`: Hentai2 URL detection, summary parsing, reader parsing, lazy image collection, and sequential image expansion fallback.
+- `siteflow/hentaiaz`: Hentaiaz URL detection, summary parsing, reader parsing, lazy image collection, and sequential image expansion fallback.
+- `siteflow/nyahentai`: Nyahentai direct reader URL detection, reader-title parsing, lazy image collection, and reader-ID image filtering.
 - `ui`: task list, legacy history, task reports, and helper state used by the Win32 frontend.
 
 ## Current Operational Contract
 
 - Public UI: Firefox-first.
-- Active downloader routes: `zeri`, `hentai2`.
-- UI filter placeholders: `nyahentai`, `hentaiaz`, `hitomi`.
+- Active downloader routes: `zeri`, `hentai2`, `hentaiaz`, `nyahentai`.
+- UI filter placeholders: `hitomi`.
 - Normal runtime root: `runtime\`.
 - Portable runtime root: `portable-data\`.
 - Per-task report: `tasks\task-<id>\report.json` under the active runtime root.

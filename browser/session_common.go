@@ -25,6 +25,26 @@ type FirefoxSession struct {
 	closed      chan struct{}
 }
 
+// PageImageRecord is a browser-side snapshot of one image element.
+type PageImageRecord struct {
+	Src           string `json:"src"`
+	AttrWidth     int    `json:"attrWidth"`
+	AttrHeight    int    `json:"attrHeight"`
+	NaturalWidth  int    `json:"naturalWidth"`
+	NaturalHeight int    `json:"naturalHeight"`
+	OffsetWidth   int    `json:"offsetWidth"`
+	OffsetHeight  int    `json:"offsetHeight"`
+	ClientWidth   int    `json:"clientWidth"`
+	ClientHeight  int    `json:"clientHeight"`
+	RectWidth     int    `json:"rectWidth"`
+	RectHeight    int    `json:"rectHeight"`
+	Complete      bool   `json:"complete"`
+	Alt           string `json:"alt"`
+	ClassName     string `json:"className"`
+	ID            string `json:"id"`
+	Loading       string `json:"loading"`
+}
+
 // BrowserPageActions is the minimal page operation surface used by site flows.
 type BrowserPageActions interface {
 	PageURL() string
@@ -100,6 +120,16 @@ func (s *FirefoxSession) LoadLazyContent() error {
 // LoadLazyContentForCount scrolls through the page until the expected image count is loaded.
 func (s *FirefoxSession) LoadLazyContentForCount(expectedImageCount int) error {
 	return sessionLoadLazyContentForCount(s, expectedImageCount)
+}
+
+// LoadLazyContentInSelector scrolls through the page until images inside one selector are loaded.
+func (s *FirefoxSession) LoadLazyContentInSelector(selector string) error {
+	return sessionLoadLazyContentInSelector(s, selector)
+}
+
+// ImageRecords returns browser-side image element metadata.
+func (s *FirefoxSession) ImageRecords() ([]PageImageRecord, error) {
+	return sessionImageRecords(s)
 }
 
 func normalizedURL(value string) string {

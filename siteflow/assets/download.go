@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"io"
@@ -13,8 +14,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 )
+
+const maxDownloadWorkers = 7
 
 // CollectionSummary is the site-neutral metadata needed to name a download batch.
 type CollectionSummary struct {
@@ -46,9 +50,20 @@ type DownloadResult struct {
 
 // DownloadImages downloads the collected image URLs into a title-scoped output directory.
 func DownloadImages(summary CollectionSummary, imageURLs []string, outputRoot string, progress DownloadProgressFunc) (DownloadResult, error) {
+	return DownloadImagesContext(context.Background(), summary, imageURLs, outputRoot, progress)
+}
+
+// DownloadImagesContext downloads the collected image URLs and stops early when ctx is canceled.
+func DownloadImagesContext(ctx context.Context, summary CollectionSummary, imageURLs []string, outputRoot string, progress DownloadProgressFunc) (DownloadResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	outputRoot = strings.TrimSpace(outputRoot)
 	if outputRoot == "" {
 		return DownloadResult{}, fmt.Errorf("output root is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return DownloadResult{}, err
 	}
 	imageURLs = NormalizeUniqueStrings(imageURLs)
 	if len(imageURLs) == 0 {
@@ -64,9 +79,11 @@ func DownloadImages(summary CollectionSummary, imageURLs []string, outputRoot st
 	}
 	log.Printf("asset download resolved dir: site=%s title=%q outputRoot=%s chapterDir=%s images=%d", summary.Site, summary.Title, outputRoot, chapterDir, len(imageURLs))
 
-	files := make([]string, 0, len(imageURLs))
+	files := make([]string, len(imageURLs))
 	var totalBytes int64
 	usedNames := make(map[string]int, len(imageURLs))
+	var usedNamesMu sync.Mutex
+	var progressMu sync.Mutex
 	report := func(current int, phase, message string) {
 		if progress == nil {
 			return
@@ -86,17 +103,82 @@ func DownloadImages(summary CollectionSummary, imageURLs []string, outputRoot st
 	}
 
 	report(0, "downloading", "prepare")
-	for i, raw := range imageURLs {
-		log.Printf("asset download image start: site=%s %d/%d url=%s", summary.Site, i+1, len(imageURLs), raw)
-		report(i, "downloading", fmt.Sprintf("%d/%d", i, len(imageURLs)))
-		saved, written, err := downloadOneImage(raw, chapterDir, i+1, usedNames)
-		if err != nil {
-			return DownloadResult{}, err
+	workerCount := downloadWorkerCount(len(imageURLs))
+	log.Printf("asset download begin: site=%s images=%d workers=%d", summary.Site, len(imageURLs), workerCount)
+
+	type job struct {
+		index int
+		url   string
+	}
+	jobs := make(chan job)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	completed := 0
+
+	setErr := func(err error) {
+		if err == nil {
+			return
 		}
-		files = append(files, saved)
-		totalBytes += written
-		log.Printf("asset download image done: site=%s %d/%d file=%s bytes=%d", summary.Site, i+1, len(imageURLs), saved, written)
-		report(i+1, "downloading", fmt.Sprintf("%d/%d", i+1, len(imageURLs)))
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+
+	for workerID := 1; workerID <= workerCount; workerID++ {
+		workerID := workerID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case item, ok := <-jobs:
+					if !ok {
+						return
+					}
+					log.Printf("asset download image start: site=%s worker=%d %d/%d url=%s", summary.Site, workerID, item.index+1, len(imageURLs), item.url)
+					saved, written, err := downloadOneImage(ctx, item.url, chapterDir, item.index+1, &usedNamesMu, usedNames)
+					if err != nil {
+						setErr(err)
+						return
+					}
+					progressMu.Lock()
+					files[item.index] = saved
+					totalBytes += written
+					completed++
+					current := completed
+					progressMu.Unlock()
+					log.Printf("asset download image done: site=%s worker=%d %d/%d file=%s bytes=%d", summary.Site, workerID, item.index+1, len(imageURLs), saved, written)
+					report(current, "downloading", fmt.Sprintf("%d/%d", current, len(imageURLs)))
+				}
+			}
+		}()
+	}
+
+	for i, raw := range imageURLs {
+		select {
+		case <-ctx.Done():
+			break
+		case jobs <- job{index: i, url: raw}:
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return DownloadResult{}, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return DownloadResult{}, err
 	}
 	report(len(imageURLs), "done", "download complete")
 
@@ -108,7 +190,17 @@ func DownloadImages(summary CollectionSummary, imageURLs []string, outputRoot st
 	}, nil
 }
 
-func downloadOneImage(rawURL, outputDir string, index int, usedNames map[string]int) (string, int64, error) {
+func downloadWorkerCount(imageCount int) int {
+	if imageCount <= 0 {
+		return 0
+	}
+	if imageCount < maxDownloadWorkers {
+		return imageCount
+	}
+	return maxDownloadWorkers
+}
+
+func downloadOneImage(ctx context.Context, rawURL, outputDir string, index int, usedNamesMu *sync.Mutex, usedNames map[string]int) (string, int64, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return "", 0, fmt.Errorf("image url is empty")
@@ -118,7 +210,7 @@ func downloadOneImage(rawURL, outputDir string, index int, usedNames map[string]
 		return "", 0, fmt.Errorf("parse image url %q: %w", rawURL, err)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("create image request %q: %w", rawURL, err)
 	}
@@ -140,7 +232,9 @@ func downloadOneImage(rawURL, outputDir string, index int, usedNames map[string]
 		ext = ".jpg"
 	}
 
+	usedNamesMu.Lock()
 	filename := uniqueDownloadFilename(baseName, ext, index, usedNames)
+	usedNamesMu.Unlock()
 	targetPath := filepath.Join(outputDir, filename)
 
 	file, err := os.Create(targetPath)

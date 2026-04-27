@@ -56,3 +56,11 @@ func sessionLoadLazyContent(s *FirefoxSession) error {
 func sessionLoadLazyContentForCount(s *FirefoxSession, expectedImageCount int) error {
 	return errors.New("playwright runtime is disabled in this build; use -tags playwright")
 }
+
+func sessionLoadLazyContentInSelector(s *FirefoxSession, selector string) error {
+	return errors.New("playwright runtime is disabled in this build; use -tags playwright")
+}
+
+func sessionImageRecords(s *FirefoxSession) ([]PageImageRecord, error) {
+	return nil, errors.New("playwright runtime is disabled in this build; use -tags playwright")
+}

@@ -24,23 +24,24 @@ const (
 	windowClassName = "ComicDownloaderWin32Frontend"
 	windowTitle     = "\u6f2b\u753b\u4e0b\u8f7d\u5668"
 
-	menuIDSetExecutable    = 1001
-	menuIDStartAll         = 1003
-	menuIDSetDownloadDir   = 1004
-	menuIDSetConcurrency   = 1005
-	menuIDSetProgressDelay = 1006
-	menuIDRefreshAdblock   = 1007
-	menuIDClearCompleted   = 1008
-	menuIDInstallBrowsers  = 1009
-	menuIDImportHistory    = 1010
-	menuIDSetDriver        = 1011
-	menuIDTaskRetry        = 1012
-	menuIDTaskDetails      = 1013
-	menuIDTaskOpenDir      = 1014
-	menuIDTaskCopyURL      = 1015
-	menuIDTaskDelete       = 1016
-	menuIDTaskStart        = 1017
-	menuIDTaskPause        = 1018
+	menuIDSetExecutable     = 1001
+	menuIDStartAll          = 1003
+	menuIDSetDownloadDir    = 1004
+	menuIDSetConcurrency    = 1005
+	menuIDSetProgressDelay  = 1006
+	menuIDRefreshAdblock    = 1007
+	menuIDClearCompleted    = 1008
+	menuIDInstallBrowsers   = 1009
+	menuIDImportHistory     = 1010
+	menuIDSetDriver         = 1011
+	menuIDTaskRetry         = 1012
+	menuIDTaskDetails       = 1013
+	menuIDTaskOpenDir       = 1014
+	menuIDTaskCopyURL       = 1015
+	menuIDTaskDelete        = 1016
+	menuIDTaskStart         = 1017
+	menuIDTaskPause         = 1018
+	menuIDSetPlaywrightRoot = 1019
 
 	controlIDURLEdit        = 2001
 	controlIDAddTask        = 2002
@@ -522,6 +523,7 @@ func (a *frontendApp) applyFrontendState(state projectruntime.FrontendState) {
 	if strings.TrimSpace(state.PlaywrightDriverDir) != "" {
 		a.menuState = a.menuState.WithPlaywrightDriverDir(state.PlaywrightDriverDir)
 	}
+	a.menuState = normalizeBrowserMenuState(a.menuState)
 	if strings.TrimSpace(state.DownloadDir) != "" {
 		a.downloadDir = projectruntime.ResolvePath(a.workspaceRoot, state.DownloadDir)
 	}
@@ -777,6 +779,7 @@ func (a *frontendApp) attachMenu(hwnd HWND) {
 	taskMenu, _, _ := procCreatePopupMenu.Call()
 
 	addMenuItem(browserMenu, menuIDSetExecutable, "\u8bbe\u7f6e Firefox \u53ef\u6267\u884c\u6587\u4ef6...")
+	addMenuItem(browserMenu, menuIDSetPlaywrightRoot, "\u8bbe\u7f6e Playwright \u6839\u76ee\u5f55...")
 	addMenuItem(browserMenu, menuIDInstallBrowsers, "\u5b89\u88c5\u6d4f\u89c8\u5668...")
 	addMenuItem(browserMenu, menuIDSetDriver, "\u8bbe\u7f6e Playwright driver \u76ee\u5f55...")
 	addMenuItem(settingsMenu, menuIDSetDownloadDir, "\u8bbe\u7f6e\u4e0b\u8f7d\u76ee\u5f55...")
@@ -1002,6 +1005,8 @@ func (a *frontendApp) handleCommand(id uint16, notifyCode uint16) {
 	switch id {
 	case menuIDSetExecutable:
 		a.pickFirefoxExecutable()
+	case menuIDSetPlaywrightRoot:
+		a.pickPlaywrightRoot()
 	case menuIDInstallBrowsers:
 		a.installBrowsersAsync()
 	case menuIDSetDriver:
@@ -1062,6 +1067,35 @@ func (a *frontendApp) pickFirefoxExecutable() {
 	a.post(msgRefreshInfo)
 }
 
+func (a *frontendApp) pickPlaywrightRoot() {
+	path, err := browseFolderDialog(a.hwnd, "Select Playwright browser root", a.defaultPlaywrightRoot())
+	if err != nil {
+		a.setStatus("select Playwright root failed: %v", err)
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		a.setStatus("Playwright root unchanged")
+		return
+	}
+	a.mu.RLock()
+	state := a.menuState
+	a.mu.RUnlock()
+	next, resolved, err := state.WithPlaywrightRoot(path)
+	if err != nil {
+		a.setStatus("resolve Playwright root failed: %v", err)
+		msgBox(a.hwnd, fmt.Sprintf("Cannot find Firefox and Playwright driver under:\r\n\r\n%s\r\n\r\n%v", path, err), "Playwright Root")
+		return
+	}
+	a.mu.Lock()
+	a.menuState = next
+	a.mu.Unlock()
+	a.setStatus("Playwright root set: firefox=%s driver=%s", resolved.FirefoxExecutable, resolved.PlaywrightDriverDir)
+	a.refreshUnfinishedTaskBrowserSettings()
+	a.persistFrontendState()
+	a.post(msgRefreshInfo)
+	msgBox(a.hwnd, fmt.Sprintf("Playwright root configured.\r\n\r\nFirefox:\r\n%s\r\n\r\nDriver:\r\n%s", resolved.FirefoxExecutable, resolved.PlaywrightDriverDir), "Playwright Root")
+}
+
 func (a *frontendApp) pickPlaywrightDriverDir() {
 	path, err := browseFolderDialog(a.hwnd, "Select Playwright driver directory", a.menuState.PlaywrightDriverDir)
 	if err != nil {
@@ -1072,10 +1106,29 @@ func (a *frontendApp) pickPlaywrightDriverDir() {
 		a.setStatus("Playwright driver directory unchanged")
 		return
 	}
+	a.mu.RLock()
+	state := a.menuState
+	a.mu.RUnlock()
+	if next, resolved, err := state.WithPlaywrightRoot(path); err == nil {
+		a.mu.Lock()
+		a.menuState = next
+		a.mu.Unlock()
+		a.setStatus("Playwright root set from driver picker: firefox=%s driver=%s", resolved.FirefoxExecutable, resolved.PlaywrightDriverDir)
+		a.refreshUnfinishedTaskBrowserSettings()
+		a.persistFrontendState()
+		a.post(msgRefreshInfo)
+		return
+	}
+	driverDir, err := ui.ResolvePlaywrightDriverDir(path)
+	if err != nil {
+		a.setStatus("resolve Playwright driver directory failed: %v", err)
+		msgBox(a.hwnd, fmt.Sprintf("Cannot find Playwright driver under:\r\n\r\n%s\r\n\r\n%v", path, err), "Playwright Driver")
+		return
+	}
 	a.mu.Lock()
-	a.menuState = a.menuState.WithPlaywrightDriverDir(path)
+	a.menuState = a.menuState.WithPlaywrightDriverDir(driverDir)
 	a.mu.Unlock()
-	a.setStatus("Playwright driver directory set: %s", path)
+	a.setStatus("Playwright driver directory set: %s", driverDir)
 	a.refreshUnfinishedTaskBrowserSettings()
 	a.persistFrontendState()
 	a.post(msgRefreshInfo)
@@ -1430,6 +1483,35 @@ func (a *frontendApp) defaultBrowserInstallRoot() string {
 		return a.menuState.FirefoxInstallRoot
 	}
 	return projectruntime.DefaultFirefoxInstallDir(a.paths.Root)
+}
+
+func (a *frontendApp) defaultPlaywrightRoot() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if strings.TrimSpace(a.menuState.FirefoxInstallRoot) != "" {
+		return a.menuState.FirefoxInstallRoot
+	}
+	if strings.TrimSpace(a.menuState.PlaywrightDriverDir) != "" {
+		return filepath.Dir(a.menuState.PlaywrightDriverDir)
+	}
+	return projectruntime.DefaultFirefoxInstallDir(a.paths.Root)
+}
+
+func normalizeBrowserMenuState(menu ui.BrowserMenuState) ui.BrowserMenuState {
+	if strings.TrimSpace(menu.FirefoxInstallRoot) != "" {
+		if next, _, err := menu.WithPlaywrightRoot(menu.FirefoxInstallRoot); err == nil {
+			menu = next
+		}
+	}
+	if strings.TrimSpace(menu.PlaywrightDriverDir) != "" {
+		if next, _, err := menu.WithPlaywrightRoot(menu.PlaywrightDriverDir); err == nil {
+			return next
+		}
+		if driverDir, err := ui.ResolvePlaywrightDriverDir(menu.PlaywrightDriverDir); err == nil {
+			menu = menu.WithPlaywrightDriverDir(driverDir)
+		}
+	}
+	return menu
 }
 
 func (a *frontendApp) defaultLegacyHistoryImportPath() string {

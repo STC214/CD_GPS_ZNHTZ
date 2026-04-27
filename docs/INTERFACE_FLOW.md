@@ -32,8 +32,8 @@ Current frontend behavior:
 - `myreadingmanga.info` is blocked at add time and shows `暂不支持此站点`.
 - The task-list site filter is a dropdown beside `任务列表`.
 - The dropdown includes `显示全部`, `Zeri`, `Nyahentai`, `Hentai2`, `Hentaiaz`, and `Hitomi`.
-- Active download flows currently exist for `zeri` and `hentai2`.
-- `nyahentai`, `hentaiaz`, and `hitomi` are currently UI/history filter placeholders until their siteflow packages are implemented.
+- Active download flows currently exist for `zeri`, `hentai2`, `hentaiaz`, and `nyahentai`.
+- `hitomi` is currently a UI/history filter placeholder until its siteflow package is implemented.
 
 ## Runtime Files
 
@@ -85,7 +85,7 @@ The portable launcher creates temporary unpack directories inside `portable-data
 frontend addPendingTask
 -> ui.TodoList.RunImmediately
 -> tasks.RunBrowserRequest
--> zeri / hentai2 URL dispatch
+-> zeri / hentai2 / hentaiaz / nyahentai URL dispatch
 -> site parser resolves title, page count, reader URL, image URLs
 -> siteflow/assets downloads images and creates thumbnail
 -> BrowserRunResult updates the frontend task card
@@ -95,6 +95,8 @@ Active site contracts:
 
 - `zeri`: documented in [`zeri_flow_rules.md`](zeri_flow_rules.md).
 - `hentai2`: documented in [`hentai2_flow_rules.md`](hentai2_flow_rules.md).
+- `hentaiaz`: follows the Hentai2-style reader image collection, with Hentaiaz-specific summary selectors.
+- `nyahentai`: direct reader URL flow; page count is derived from the lazy-loaded filtered image count.
 
 Shared asset contract:
 

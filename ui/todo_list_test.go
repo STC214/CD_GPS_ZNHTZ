@@ -215,6 +215,103 @@ func TestTodoListClearFinishedRemovesCompletedItems(t *testing.T) {
 	}
 }
 
+func TestTodoListRemoveByIDsKeepsActiveTasks(t *testing.T) {
+	list := NewTodoList()
+	list.mu.Lock()
+	list.items = []TodoItem{
+		{ID: "todo-running", Status: TodoStatusRunning},
+		{ID: "todo-queued", Status: TodoStatusQueued},
+		{ID: "todo-preparing", Status: TodoStatusPreparing},
+		{ID: "todo-paused", Status: TodoStatusPaused},
+		{ID: "todo-failed", Status: TodoStatusFailed},
+	}
+	list.mu.Unlock()
+
+	removed := list.RemoveByIDs([]string{"todo-running", "todo-queued", "todo-preparing", "todo-paused", "todo-failed"})
+	if removed != 4 {
+		t.Fatalf("removed = %d, want 4", removed)
+	}
+	if _, ok := list.ItemByID("todo-running"); !ok {
+		t.Fatal("running task was removed")
+	}
+	if _, ok := list.ItemByID("todo-queued"); ok {
+		t.Fatal("queued task was not removed")
+	}
+	if _, ok := list.ItemByID("todo-preparing"); ok {
+		t.Fatal("preparing task was not removed")
+	}
+	if _, ok := list.ItemByID("todo-paused"); ok {
+		t.Fatal("paused task was not removed")
+	}
+	if _, ok := list.ItemByID("todo-failed"); ok {
+		t.Fatal("failed task was not removed")
+	}
+}
+
+func TestTodoListPauseUpdatesRunningTasks(t *testing.T) {
+	list := NewTodoList()
+	list.mu.Lock()
+	list.items = []TodoItem{
+		{ID: "todo-running", Status: TodoStatusRunning},
+		{ID: "todo-queued", Status: TodoStatusQueued},
+	}
+	list.mu.Unlock()
+
+	changed := list.SetStatusByIDs([]string{"todo-running", "todo-queued"}, TodoStatusPaused, "paused")
+	if changed != 2 {
+		t.Fatalf("changed = %d, want 2", changed)
+	}
+	running, ok := list.ItemByID("todo-running")
+	if !ok || running.Status != TodoStatusPaused {
+		t.Fatalf("running status = %q ok=%v, want paused", running.Status, ok)
+	}
+	queued, ok := list.ItemByID("todo-queued")
+	if !ok || queued.Status != TodoStatusPaused {
+		t.Fatalf("queued status = %q ok=%v, want paused", queued.Status, ok)
+	}
+}
+
+func TestTodoListStatusChangeCancelsRunningTask(t *testing.T) {
+	list := NewTodoList()
+	started := make(chan string, 1)
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := list.RunImmediately(tasks.BrowserLaunchRequest{URL: "https://example.com"}, func(req tasks.BrowserLaunchRequest) (tasks.BrowserRunResult, error) {
+			started <- req.TaskID
+			<-req.Context.Done()
+			return tasks.BrowserRunResult{}, req.Context.Err()
+		})
+		done <- err
+	}()
+
+	var id string
+	select {
+	case id = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+	changed := list.SetStatusByIDs([]string{id}, TodoStatusPaused, "paused")
+	if changed != 1 {
+		t.Fatalf("changed = %d, want 1", changed)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunImmediately() error = nil, want cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("task did not stop after status change")
+	}
+	item, ok := list.ItemByID(id)
+	if !ok {
+		t.Fatalf("task %s missing", id)
+	}
+	if item.Status != TodoStatusPaused {
+		t.Fatalf("task status = %q, want paused", item.Status)
+	}
+}
+
 func TestTodoListRefreshUnfinishedRequests(t *testing.T) {
 	list := NewTodoList()
 	list.mu.Lock()

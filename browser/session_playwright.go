@@ -3,11 +3,13 @@
 package browser
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/playwright-community/playwright-go"
 
@@ -157,7 +159,7 @@ func openFirefoxSession(m FirefoxMiddleware, opts BrowserSessionOptions) (*Firef
 	if strings.TrimSpace(targetURL) == "" {
 		targetURL = m.URL()
 	}
-	if _, err := page.Goto(targetURL); err != nil {
+	if err := gotoWithRetry(page, targetURL); err != nil {
 		_ = page.Close()
 		_ = context.Close()
 		_ = pw.Stop()
@@ -251,11 +253,46 @@ func sessionGoto(s *FirefoxSession, url string) error {
 	if !ok || page == nil {
 		return errors.New("browser session page is not a playwright.Page")
 	}
-	if _, err := page.Goto(url); err != nil {
+	if err := gotoWithRetry(page, url); err != nil {
 		return err
 	}
 	s.URL = url
 	return nil
+}
+
+func gotoWithRetry(page playwright.Page, url string) error {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if _, err := page.Goto(url); err != nil {
+			lastErr = err
+			if !isRetryableGotoError(err) || attempt == 3 {
+				break
+			}
+			fmt.Printf("browser goto retry %d/3 for %q after: %v\n", attempt+1, url, err)
+			time.Sleep(time.Duration(attempt) * 700 * time.Millisecond)
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func isRetryableGotoError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, token := range []string{
+		"ns_error_net_interrupt",
+		"ns_error_net_reset",
+		"net::err",
+		"navigation failed because page was closed",
+	} {
+		if strings.Contains(message, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionClickText(s *FirefoxSession, text string) error {
@@ -355,6 +392,203 @@ func sessionLoadLazyContentForCount(s *FirefoxSession, expectedImageCount int) e
 		}
 	}
 	return nil
+}
+
+func sessionLoadLazyContentInSelector(s *FirefoxSession, selector string) error {
+	if s == nil {
+		return errors.New("browser session is nil")
+	}
+	page, ok := s.Page.(playwright.Page)
+	if !ok || page == nil {
+		return errors.New("browser session page is not a playwright.Page")
+	}
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return errors.New("lazy selector is empty")
+	}
+	result, err := page.Evaluate(`async (selector) => {
+		const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+		const minSize = 300;
+		const startedAt = Date.now();
+		const signatureFromLocation = () => {
+			const value = String(window.location.pathname || window.location.href || '');
+			const reMatch = value.match(/\/fanzine\/re(\d{6,})/i) || value.match(/re(\d{6,})/i);
+			if (reMatch) return reMatch[1];
+			const numericMatch = value.match(/\d{6,}/);
+			return numericMatch ? numericMatch[0] : '';
+		};
+		const imageURL = (img) => {
+			const candidates = [
+				img.currentSrc,
+				img.src,
+				img.getAttribute('data-src'),
+				img.getAttribute('data-original'),
+				img.getAttribute('data-lazy-src'),
+				img.getAttribute('data-url'),
+				img.getAttribute('data-srcset'),
+				img.getAttribute('srcset'),
+			];
+			for (const raw of candidates) {
+				if (!raw) continue;
+				const first = String(raw).split(',')[0].trim().split(/\s+/)[0];
+				if (first) return first;
+			}
+			return '';
+		};
+		const numericAttr = (img, name) => {
+			const value = parseInt(img.getAttribute(name) || '0', 10);
+			return Number.isFinite(value) ? value : 0;
+		};
+		const imageStats = () => {
+			const root = document.querySelector(selector);
+			if (!root) {
+				return { exists: false, total: 0, loaded: 0, targetTotal: 0, targetSized: 0, complete: false, sizedComplete: false };
+			}
+			const signature = signatureFromLocation();
+			const images = Array.from(root.querySelectorAll('img'));
+			const targetImages = signature ? images.filter(img => imageURL(img).includes(signature)) : images;
+			const total = images.length;
+			const loaded = images.filter(img => img.complete && img.naturalWidth > 0).length;
+			const targetTotal = targetImages.length;
+			const targetSized = targetImages.filter(img => numericAttr(img, 'width') >= minSize && numericAttr(img, 'height') >= minSize).length;
+			return {
+				exists: true,
+				total,
+				loaded,
+				targetTotal,
+				targetSized,
+				signature,
+				elapsedMS: Date.now() - startedAt,
+				complete: total > 0 && loaded === total,
+				sizedComplete: targetTotal > 0 && targetSized === targetTotal,
+			};
+		};
+		const scrollTop = () => window.scrollTo(0, 0);
+		const scrollToElement = () => {
+			const root = document.querySelector(selector);
+			if (root) root.scrollIntoView({ block: 'start' });
+		};
+		const scrollBounce = async () => {
+			const root = document.querySelector(selector);
+			const docMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+			const rect = root ? root.getBoundingClientRect() : null;
+			const rootTop = root ? Math.max(0, window.scrollY + rect.top - 80) : 0;
+			const rootBottom = root ? Math.max(rootTop, window.scrollY + rect.bottom - window.innerHeight + 80) : docMax;
+			const step = Math.max(240, Math.floor(window.innerHeight * 0.72));
+			const points = [];
+			for (let point = rootTop; point < rootBottom; point += step) {
+				points.push(point);
+			}
+			points.push(rootBottom, docMax);
+			for (const point of points) {
+				window.scrollTo(0, Math.max(0, Math.floor(point)));
+				window.dispatchEvent(new Event('scroll'));
+				await sleep(70);
+			}
+		};
+		let stable = 0;
+		let previousTotal = -1;
+		let previousLoaded = -1;
+		let lastSizeCheck = 0;
+		for (let i = 0; i < 90; i++) {
+			scrollToElement();
+			await sleep(40);
+			await scrollBounce();
+			const stats = imageStats();
+			if (!stats.exists) {
+				await sleep(120);
+				continue;
+			}
+			if (stats.elapsedMS - lastSizeCheck >= 5000) {
+				lastSizeCheck = stats.elapsedMS;
+				if (stats.sizedComplete) {
+					scrollTop();
+					await sleep(100);
+					return stats;
+				}
+			}
+			if (stats.complete && stats.total === previousTotal && stats.loaded === previousLoaded) {
+				stable++;
+			} else {
+				stable = 0;
+			}
+			previousTotal = stats.total;
+			previousLoaded = stats.loaded;
+			if (stats.complete && stable >= 3) {
+				scrollTop();
+				await sleep(100);
+				return stats;
+			}
+			await sleep(120);
+		}
+		const stats = imageStats();
+		scrollTop();
+		await sleep(100);
+		return stats;
+	}`, selector)
+	if err != nil {
+		return err
+	}
+	if stats, ok := result.(map[string]any); ok {
+		exists, _ := stats["exists"].(bool)
+		total := int(asFloat64(stats["total"]))
+		loaded := int(asFloat64(stats["loaded"]))
+		targetTotal := int(asFloat64(stats["targetTotal"]))
+		targetSized := int(asFloat64(stats["targetSized"]))
+		if !exists {
+			return fmt.Errorf("lazy selector %q not found", selector)
+		}
+		if total <= 0 {
+			return fmt.Errorf("lazy selector %q has no images", selector)
+		}
+		if targetTotal > 0 && targetSized >= targetTotal {
+			return nil
+		}
+		if loaded < total {
+			return fmt.Errorf("lazy selector %q images timed out: %d/%d loaded, sized targets %d/%d", selector, loaded, total, targetSized, targetTotal)
+		}
+	}
+	return nil
+}
+
+func sessionImageRecords(s *FirefoxSession) ([]PageImageRecord, error) {
+	if s == nil {
+		return nil, errors.New("browser session is nil")
+	}
+	page, ok := s.Page.(playwright.Page)
+	if !ok || page == nil {
+		return nil, errors.New("browser session page is not a playwright.Page")
+	}
+	result, err := page.Evaluate(`() => JSON.stringify(Array.from(document.images || []).map((img) => ({
+		src: img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.getAttribute('data-url') || '',
+		attrWidth: parseInt(img.getAttribute('width') || '0', 10) || 0,
+		attrHeight: parseInt(img.getAttribute('height') || '0', 10) || 0,
+		naturalWidth: img.naturalWidth || 0,
+		naturalHeight: img.naturalHeight || 0,
+		offsetWidth: img.offsetWidth || 0,
+		offsetHeight: img.offsetHeight || 0,
+		clientWidth: img.clientWidth || 0,
+		clientHeight: img.clientHeight || 0,
+		rectWidth: Math.round(img.getBoundingClientRect().width || 0),
+		rectHeight: Math.round(img.getBoundingClientRect().height || 0),
+		complete: !!img.complete,
+		alt: img.alt || '',
+		className: img.className || '',
+		id: img.id || '',
+		loading: img.loading || ''
+	})))`)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := result.(string)
+	if !ok {
+		return nil, fmt.Errorf("image records returned %T", result)
+	}
+	var records []PageImageRecord
+	if err := json.Unmarshal([]byte(raw), &records); err != nil {
+		return nil, fmt.Errorf("decode image records: %w", err)
+	}
+	return records, nil
 }
 
 func asFloat64(value any) float64 {
