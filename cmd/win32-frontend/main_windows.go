@@ -15,6 +15,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"comic_downloader_go_playwright_stealth/netproxy"
 	projectruntime "comic_downloader_go_playwright_stealth/runtime"
 	"comic_downloader_go_playwright_stealth/tasks"
 	"comic_downloader_go_playwright_stealth/ui"
@@ -42,6 +43,7 @@ const (
 	menuIDTaskStart         = 1017
 	menuIDTaskPause         = 1018
 	menuIDSetPlaywrightRoot = 1019
+	menuIDSetProxyServer    = 1020
 
 	controlIDURLEdit        = 2001
 	controlIDAddTask        = 2002
@@ -404,6 +406,7 @@ type frontendApp struct {
 	concurrency   int
 	progressDelay time.Duration
 	adblockInfo   string
+	proxyServer   string
 
 	hwnd HWND
 
@@ -533,6 +536,7 @@ func (a *frontendApp) applyFrontendState(state projectruntime.FrontendState) {
 	if state.ProgressRefreshMs > 0 {
 		a.progressDelay = time.Duration(state.ProgressRefreshMs) * time.Millisecond
 	}
+	a.proxyServer = strings.TrimSpace(state.ProxyServer)
 	a.windowPlacement = state.WindowPlacement
 	a.windowPlacementSet = !frontendWindowPlacementZero(state.WindowPlacement)
 	a.mu.Unlock()
@@ -549,6 +553,7 @@ func (a *frontendApp) persistFrontendState() {
 	downloadDir := a.downloadDir
 	concurrency := a.concurrency
 	progressRefreshMs := int(a.progressDelay / time.Millisecond)
+	proxyServer := a.proxyServer
 	a.mu.RUnlock()
 	state := projectruntime.FrontendState{
 		Version:               1,
@@ -557,6 +562,7 @@ func (a *frontendApp) persistFrontendState() {
 		FirefoxInstallRoot:    menu.FirefoxInstallRoot,
 		PlaywrightDriverDir:   menu.PlaywrightDriverDir,
 		DownloadDir:           projectruntime.RelativizePath(a.workspaceRoot, downloadDir),
+		ProxyServer:           proxyServer,
 		Concurrency:           concurrency,
 		ProgressRefreshMs:     progressRefreshMs,
 		WindowPlacement:       a.currentWindowPlacement(),
@@ -783,6 +789,7 @@ func (a *frontendApp) attachMenu(hwnd HWND) {
 	addMenuItem(browserMenu, menuIDInstallBrowsers, "\u5b89\u88c5\u6d4f\u89c8\u5668...")
 	addMenuItem(browserMenu, menuIDSetDriver, "\u8bbe\u7f6e Playwright driver \u76ee\u5f55...")
 	addMenuItem(settingsMenu, menuIDSetDownloadDir, "\u8bbe\u7f6e\u4e0b\u8f7d\u76ee\u5f55...")
+	addMenuItem(settingsMenu, menuIDSetProxyServer, "\u8bbe\u7f6e\u4ee3\u7406\u670d\u52a1\u5668...")
 	addMenuItem(settingsMenu, menuIDSetConcurrency, "\u8bbe\u7f6e\u5e76\u53d1\u6570...")
 	addMenuItem(settingsMenu, menuIDSetProgressDelay, "\u8bbe\u7f6e\u8fdb\u5ea6\u5237\u65b0\u95f4\u9694...")
 	addMenuItem(settingsMenu, menuIDRefreshAdblock, "\u66f4\u65b0\u5e7f\u544a\u62e6\u622a\u89c4\u5219")
@@ -820,6 +827,7 @@ func (a *frontendApp) createControls(hwnd HWND) {
 		{class: "Static", text: "\u4efb\u52a1\u5217\u8868", style: WS_CHILD | WS_VISIBLE, x: 20, y: 70, w: 120, h: 20, id: controlIDTaskTitle},
 		{class: "ComboBox", text: "", style: WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_TABSTOP, x: 122, y: 48, w: 116, h: 150, id: controlIDSiteFilter},
 		{class: "TaskBoardControl", text: "", style: WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL, exStyle: WS_EX_CLIENTEDGE, x: 20, y: 88, w: 1240, h: 300, id: controlIDListBox},
+		{class: actionProgressClassName, text: "", style: WS_CHILD | WS_VISIBLE, x: 20, y: 830, w: 1240, h: 20, id: controlIDActionProgress},
 		{class: "Static", text: "ready", style: WS_CHILD | WS_VISIBLE, x: 20, y: 862, w: 1240, h: 24, id: controlIDStatusText},
 	}
 
@@ -855,6 +863,8 @@ func (a *frontendApp) createControls(hwnd HWND) {
 			a.siteFilterCombo = HWND(hwndChild)
 		case controlIDListBox:
 			a.taskBoard = HWND(hwndChild)
+		case controlIDActionProgress:
+			a.actionProgress = HWND(hwndChild)
 		case controlIDStatusText:
 			a.statusText = HWND(hwndChild)
 		}
@@ -867,6 +877,7 @@ func (a *frontendApp) createControls(hwnd HWND) {
 	a.setupSiteFilterCombo()
 	setControlFont(a.taskTitle, uiFont)
 	setControlFont(a.taskBoard, uiFont)
+	setControlFont(a.actionProgress, uiFont)
 	setControlFont(a.statusText, uiFont)
 	a.updateConcurrencyButton(a.concurrency)
 	a.updateSiteFilterButtons()
@@ -897,7 +908,8 @@ func (a *frontendApp) layout() {
 	setCueBanner(a.urlEdit, "输入漫画页面 URL")
 	taskTop := int32(74)
 	statusY := height - 34
-	taskBottom := statusY - 10
+	actionY := statusY - 24
+	taskBottom := actionY - 8
 	taskH := max32(160, taskBottom-taskTop)
 	titleW := int32(60)
 	move(a.taskTitle, padding, 50, titleW, 20)
@@ -911,6 +923,7 @@ func (a *frontendApp) layout() {
 	}
 	move(a.siteFilterCombo, filterX, 48, filterW, 150)
 	move(a.taskBoard, padding, taskTop, width-padding*2, taskH)
+	move(a.actionProgress, padding, actionY, width-padding*2, 20)
 	move(a.statusText, padding, statusY, width-padding*2, 24)
 	taskBoardRefresh(a.taskBoard)
 }
@@ -1017,6 +1030,8 @@ func (a *frontendApp) handleCommand(id uint16, notifyCode uint16) {
 		a.importLegacyHistoryAsync()
 	case menuIDSetDownloadDir:
 		a.pickDownloadDir()
+	case menuIDSetProxyServer:
+		a.promptProxyServer()
 	case menuIDSetConcurrency:
 		a.promptConcurrency()
 	case menuIDSetProgressDelay:
@@ -1198,6 +1213,7 @@ func (a *frontendApp) refreshUnfinishedTaskBrowserSettings() int {
 	a.mu.RLock()
 	menu := a.menuState
 	downloadDir := a.downloadDir
+	proxyServer := a.proxyServer
 	runtimeRoot := a.paths.Root
 	a.mu.RUnlock()
 	changed := a.todo.RefreshUnfinishedRequests(func(req tasks.BrowserLaunchRequest) tasks.BrowserLaunchRequest {
@@ -1206,6 +1222,7 @@ func (a *frontendApp) refreshUnfinishedTaskBrowserSettings() int {
 		req.BrowserPath = menu.FirefoxExecutablePath
 		req.BrowserInstallDir = menu.FirefoxInstallRoot
 		req.DriverDir = menu.PlaywrightDriverDir
+		req.ProxyServer = proxyServer
 		if strings.TrimSpace(req.DownloadRoot) == "" {
 			req.DownloadRoot = downloadDir
 		}
@@ -1236,6 +1253,33 @@ func (a *frontendApp) pickDownloadDir() {
 	a.mu.Unlock()
 	a.persistFrontendState()
 	a.setStatus("download directory set: %s", path)
+	a.post(msgRefreshInfo)
+}
+
+func (a *frontendApp) promptProxyServer() {
+	current := a.currentProxyServer()
+	value, ok := promptTextDialog(a.hwnd, current, "\u8bbe\u7f6e\u4ee3\u7406\u670d\u52a1\u5668", "\u8bf7\u8f93\u5165\u4ee3\u7406\u5730\u5740\uff08\u7559\u7a7a\u4f7f\u7528\u7cfb\u7edf\u8bbe\u7f6e\uff09\uff1a", true)
+	if !ok {
+		a.setStatus("proxy server unchanged")
+		return
+	}
+	value = strings.TrimSpace(value)
+	normalized, err := netproxy.NormalizeServer(value)
+	if err != nil {
+		msgBox(a.hwnd, err.Error(), "Proxy Server")
+		a.setStatus("proxy server invalid: %v", err)
+		return
+	}
+	a.mu.Lock()
+	a.proxyServer = normalized
+	a.mu.Unlock()
+	a.refreshUnfinishedTaskBrowserSettings()
+	a.persistFrontendState()
+	if normalized == "" {
+		a.setStatus("proxy server cleared; using system proxy settings")
+	} else {
+		a.setStatus("proxy server set: %s", normalized)
+	}
 	a.post(msgRefreshInfo)
 }
 
@@ -1295,6 +1339,12 @@ func (a *frontendApp) updateConcurrencyButton(value int) {
 	procSetWindowTextW.Call(uintptr(a.concurrencyBtn), uintptr(unsafe.Pointer(text)))
 }
 
+func (a *frontendApp) currentProxyServer() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.proxyServer
+}
+
 func (a *frontendApp) currentProgressDelay() time.Duration {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -1323,6 +1373,7 @@ func (a *frontendApp) addPendingTask() {
 	a.mu.RLock()
 	menu := a.menuState
 	downloadDir := a.downloadDir
+	proxyServer := a.proxyServer
 	req := tasks.BrowserLaunchRequest{
 		URL:               url,
 		BrowserType:       browserTypeForTaskURL(url, menu.SelectedBrowser),
@@ -1332,6 +1383,7 @@ func (a *frontendApp) addPendingTask() {
 		DriverDir:         menu.PlaywrightDriverDir,
 		DownloadRoot:      downloadDir,
 		OutputDir:         downloadDir,
+		ProxyServer:       proxyServer,
 		Headless:          true,
 	}
 	a.mu.RUnlock()
@@ -1439,8 +1491,22 @@ func (a *frontendApp) importLegacyHistoryAsync() {
 		}
 		a.setActionProgress(0.15, "\u9009\u62e9\u5386\u53f2")
 		a.setStatus("importing legacy history from %s...", path)
-		a.setActionProgress(0.55, "\u52a0\u8f7d\u5386\u53f2")
-		count := a.todo.ImportLegacyComicDownloaderState(state)
+		a.setActionProgress(0.30, "\u89e3\u6790\u5386\u53f2")
+		count := a.todo.ImportLegacyComicDownloaderStateWithProgress(state, func(current, total int, phase string) {
+			fraction := legacyImportProgressFraction(current, total, phase)
+			switch phase {
+			case "report":
+				a.setActionProgress(fraction, "\u5199\u5165\u62a5\u544a")
+				if total > 0 {
+					a.setStatus("saving imported legacy task reports %d/%d...", current, total)
+				}
+			default:
+				a.setActionProgress(fraction, "\u5bfc\u5165\u5386\u53f2")
+				if total > 0 {
+					a.setStatus("importing legacy history %d/%d from %s...", current, total, path)
+				}
+			}
+		})
 		if count == 0 {
 			a.setActionProgress(1, "\u5b8c\u6210")
 			a.setStatus("no legacy history imported from %s", path)
@@ -1453,6 +1519,22 @@ func (a *frontendApp) importLegacyHistoryAsync() {
 		a.post(msgRefreshTasks)
 		a.post(msgRefreshInfo)
 	}()
+}
+
+func legacyImportProgressFraction(current, total int, phase string) float64 {
+	if total <= 0 {
+		if phase == "report" {
+			return 0.90
+		}
+		return 0.30
+	}
+	fraction := float64(current) / float64(total)
+	switch phase {
+	case "report":
+		return 0.75 + 0.20*clamp01(fraction)
+	default:
+		return 0.30 + 0.45*clamp01(fraction)
+	}
 }
 
 func (a *frontendApp) setActionProgress(value float64, text string) {

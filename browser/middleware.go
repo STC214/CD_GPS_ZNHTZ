@@ -32,6 +32,7 @@ type LaunchSpec struct {
 	TimezoneID       string         `json:"timezoneId"`
 	ViewportWidth    int            `json:"viewportWidth"`
 	ViewportHeight   int            `json:"viewportHeight"`
+	ProxyServer      string         `json:"proxyServer,omitempty"`
 	FirefoxUserPrefs map[string]any `json:"firefoxUserPrefs,omitempty"`
 	Headless         bool           `json:"headless"`
 	Adblock          bool           `json:"adblock"`
@@ -51,6 +52,7 @@ type Payload struct {
 	TimezoneID       string         `json:"timezoneId"`
 	ViewportWidth    int            `json:"viewportWidth"`
 	ViewportHeight   int            `json:"viewportHeight"`
+	ProxyServer      string         `json:"proxyServer,omitempty"`
 	FirefoxUserPrefs map[string]any `json:"firefoxUserPrefs,omitempty"`
 	Headless         bool           `json:"headless"`
 	Adblock          bool           `json:"adblock"`

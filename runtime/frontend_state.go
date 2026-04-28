@@ -32,6 +32,7 @@ type FrontendState struct {
 	FirefoxInstallRoot    string                  `json:"firefoxInstallRoot,omitempty"`
 	PlaywrightDriverDir   string                  `json:"playwrightDriverDir,omitempty"`
 	DownloadDir           string                  `json:"downloadDir,omitempty"`
+	ProxyServer           string                  `json:"proxyServer,omitempty"`
 	Concurrency           int                     `json:"concurrency,omitempty"`
 	ProgressRefreshMs     int                     `json:"progressRefreshMs,omitempty"`
 	WindowPlacement       FrontendWindowPlacement `json:"windowPlacement,omitempty"`

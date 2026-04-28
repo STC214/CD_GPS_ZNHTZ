@@ -50,6 +50,12 @@ func (l *TodoList) PreviewLegacyComicDownloaderState(state projectruntime.Legacy
 
 // ImportLegacyComicDownloaderState merges the current todo list with a snapshot from the old app state file.
 func (l *TodoList) ImportLegacyComicDownloaderState(state projectruntime.LegacyComicDownloaderState) int {
+	return l.ImportLegacyComicDownloaderStateWithProgress(state, nil)
+}
+
+// ImportLegacyComicDownloaderStateWithProgress merges the current todo list with a snapshot from the old app state file
+// and reports best-effort progress as legacy tasks are converted and reports are saved.
+func (l *TodoList) ImportLegacyComicDownloaderStateWithProgress(state projectruntime.LegacyComicDownloaderState, progress func(current, total int, phase string)) int {
 	l.mu.Lock()
 	existingKeys := make(map[string]struct{}, len(l.items))
 	maxSeq := l.seq
@@ -63,7 +69,11 @@ func (l *TodoList) ImportLegacyComicDownloaderState(state projectruntime.LegacyC
 
 	items := make([]TodoItem, 0, len(state.Tasks))
 	paths := projectruntime.NewPaths(strings.TrimSpace(l.runtimeRoot))
-	for _, legacy := range state.Tasks {
+	total := len(state.Tasks)
+	if progress != nil {
+		progress(0, total, "convert")
+	}
+	for idx, legacy := range state.Tasks {
 		item := legacyTaskToTodoItem(legacy)
 		item.Request.DownloadRoot = projectruntime.ResolvePath(paths.Root, item.Request.DownloadRoot)
 		item.Request.OutputDir = projectruntime.ResolvePath(paths.Root, item.Request.OutputDir)
@@ -74,12 +84,18 @@ func (l *TodoList) ImportLegacyComicDownloaderState(state projectruntime.LegacyC
 		}
 		key := legacyHistoryImportKey(item.Request)
 		if _, exists := existingKeys[key]; exists {
+			if progress != nil {
+				progress(idx+1, total, "convert")
+			}
 			continue
 		}
 		existingKeys[key] = struct{}{}
 		items = append(items, item)
 		if itemSeq := todoItemSequence(item.ID); itemSeq > maxSeq {
 			maxSeq = itemSeq
+		}
+		if progress != nil {
+			progress(idx+1, total, "convert")
 		}
 	}
 
@@ -98,9 +114,15 @@ func (l *TodoList) ImportLegacyComicDownloaderState(state projectruntime.LegacyC
 		notifier()
 	}
 	if runtimeRoot != "" {
-		for _, item := range items {
+		if progress != nil {
+			progress(0, len(items), "report")
+		}
+		for idx, item := range items {
 			if err := SaveTaskReport(runtimeRoot, item); err != nil {
 				log.Printf("save imported legacy task report failed: %v", err)
+			}
+			if progress != nil {
+				progress(idx+1, len(items), "report")
 			}
 		}
 	}

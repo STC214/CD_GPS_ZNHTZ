@@ -13,6 +13,7 @@ import (
 
 	"github.com/playwright-community/playwright-go"
 
+	"comic_downloader_go_playwright_stealth/netproxy"
 	projectruntime "comic_downloader_go_playwright_stealth/runtime"
 )
 
@@ -47,11 +48,18 @@ func (m FirefoxMiddleware) toPlaywrightContextOptions(opts BrowserSessionOptions
 }
 
 func (m FirefoxMiddleware) toPlaywrightPersistentContextOptions(opts BrowserSessionOptions) playwright.BrowserTypeLaunchPersistentContextOptions {
+	proxyServer, err := netproxy.NormalizeServer(m.resolveProxyServer(opts))
+	if err != nil {
+		proxyServer = ""
+	}
 	contextOptions := playwright.BrowserTypeLaunchPersistentContextOptions{
 		ExecutablePath:   playwright.String(m.BrowserPath()),
 		Headless:         playwright.Bool(m.resolveHeadless(opts)),
 		FirefoxUserPrefs: m.resolveFirefoxUserPrefs(opts),
 		Timeout:          playwright.Float(float64(m.resolveLaunchTimeoutMS(opts))),
+	}
+	if proxyServer != "" {
+		contextOptions.Proxy = &playwright.Proxy{Server: proxyServer}
 	}
 	if userAgent := strings.TrimSpace(m.resolveUserAgent(opts)); userAgent != "" {
 		contextOptions.UserAgent = playwright.String(userAgent)
@@ -81,6 +89,9 @@ func openFirefoxSession(m FirefoxMiddleware, opts BrowserSessionOptions) (*Firef
 	}
 	if _, err := os.Stat(spec.StealthScript.Path); err != nil {
 		return nil, fmt.Errorf("stealth script %q: %w", spec.StealthScript.Path, err)
+	}
+	if _, err := netproxy.NormalizeServer(spec.ProxyServer); err != nil {
+		return nil, err
 	}
 
 	previousDriverPath := os.Getenv("PLAYWRIGHT_DRIVER_PATH")

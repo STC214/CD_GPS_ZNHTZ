@@ -25,6 +25,7 @@ type FirefoxMiddleware struct {
 	timezoneID        string
 	viewportWidth     int
 	viewportHeight    int
+	proxyServer       string
 	firefoxUserPrefs  map[string]any
 	browserPath       string
 	headless          bool
@@ -48,6 +49,7 @@ func NewFirefoxMiddleware(url string) FirefoxMiddleware {
 		timezoneID:        "",
 		viewportWidth:     1365,
 		viewportHeight:    768,
+		proxyServer:       "",
 		firefoxUserPrefs:  nil,
 		browserPath:       projectruntime.DefaultFirefoxExecutablePath("runtime"),
 		headless:          true,
@@ -145,6 +147,12 @@ func (m FirefoxMiddleware) WithViewport(width, height int) FirefoxMiddleware {
 	if height > 0 {
 		m.viewportHeight = height
 	}
+	return m
+}
+
+// WithProxyServer sets the proxy server used by the browser context.
+func (m FirefoxMiddleware) WithProxyServer(proxyServer string) FirefoxMiddleware {
+	m.proxyServer = strings.TrimSpace(proxyServer)
 	return m
 }
 
@@ -304,6 +312,13 @@ func (m FirefoxMiddleware) resolveViewport(opts BrowserSessionOptions) (int, int
 	return width, height
 }
 
+func (m FirefoxMiddleware) resolveProxyServer(opts BrowserSessionOptions) string {
+	if trimmed := strings.TrimSpace(opts.ProxyServer); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(m.proxyServer)
+}
+
 func (m FirefoxMiddleware) LaunchSpec(opts BrowserSessionOptions) LaunchSpec {
 	width, height := m.resolveViewport(opts)
 	return LaunchSpec{
@@ -319,6 +334,7 @@ func (m FirefoxMiddleware) LaunchSpec(opts BrowserSessionOptions) LaunchSpec {
 		TimezoneID:       m.resolveTimezoneID(opts),
 		ViewportWidth:    width,
 		ViewportHeight:   height,
+		ProxyServer:      m.resolveProxyServer(opts),
 		FirefoxUserPrefs: m.resolveFirefoxUserPrefs(opts),
 		Headless:         m.resolveHeadless(opts),
 		Adblock:          m.adblock,
@@ -340,6 +356,7 @@ func (m FirefoxMiddleware) Payload(opts BrowserSessionOptions) Payload {
 		TimezoneID:       m.resolveTimezoneID(opts),
 		ViewportWidth:    width,
 		ViewportHeight:   height,
+		ProxyServer:      m.resolveProxyServer(opts),
 		FirefoxUserPrefs: m.resolveFirefoxUserPrefs(opts),
 		Headless:         m.resolveHeadless(opts),
 		Adblock:          m.adblock,

@@ -123,6 +123,7 @@ func TestBrowserLaunchRequestUsesFrontendStateDefaults(t *testing.T) {
 		FirefoxInstallRoot:    installRoot,
 		PlaywrightDriverDir:   driverDir,
 		DownloadDir:           downloadDir,
+		ProxyServer:           "socks5://127.0.0.1:1080",
 	}); err != nil {
 		t.Fatalf("save frontend state: %v", err)
 	}
@@ -145,6 +146,28 @@ func TestBrowserLaunchRequestUsesFrontendStateDefaults(t *testing.T) {
 	}
 	if req.OutputDir != downloadDir {
 		t.Fatalf("OutputDir = %q, want frontend state download dir", req.OutputDir)
+	}
+	if req.ProxyServer != "socks5://127.0.0.1:1080" {
+		t.Fatalf("ProxyServer = %q, want frontend state proxy", req.ProxyServer)
+	}
+}
+
+func TestBrowserLaunchRequestNormalizesProxyEnvFallback(t *testing.T) {
+	workspace := t.TempDir()
+	runtimeRoot := filepath.Join(workspace, "runtime")
+	t.Setenv("COMIC_DOWNLOADER_PROXY", "127.0.0.1:7890")
+
+	req := BrowserLaunchRequest{
+		URL:         "https://example.com",
+		RuntimeRoot: runtimeRoot,
+	}
+	req = req.Normalize()
+
+	if req.ProxyServer != "http://127.0.0.1:7890" {
+		t.Fatalf("ProxyServer = %q, want normalized proxy", req.ProxyServer)
+	}
+	if req.BrowserOptions().ProxyServer != req.ProxyServer {
+		t.Fatalf("BrowserOptions().ProxyServer = %q, want %q", req.BrowserOptions().ProxyServer, req.ProxyServer)
 	}
 }
 

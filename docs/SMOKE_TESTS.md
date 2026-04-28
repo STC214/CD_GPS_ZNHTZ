@@ -15,10 +15,11 @@ Confirm local configuration:
 - Firefox executable path can be set from the frontend menu or passed to `task-probe` with `-browser-path`.
 - Playwright driver directory can be set from the frontend menu or passed to `task-probe` with `-driver-dir`.
 - Runtime root defaults to `runtime\`, or can be overridden with `COMIC_DOWNLOADER_RUNTIME_ROOT`.
+- Proxy is optional. Prefer setting it from the frontend when you need to verify proxy behavior.
 
 ## Firefox Probe
 
-Open a visible Firefox session:
+Open a visible Firefox session with a neutral URL:
 
 ```powershell
 go run -tags playwright ./cmd/task-probe `
@@ -32,16 +33,15 @@ Expected:
 
 - Firefox opens normally.
 - The command prints the page title and temporary Playwright profile path.
-- In Firefox, `about:support` shows `Application Basics -> Profile Directory` pointing to the printed temporary profile.
 - Closing Firefox exits the command.
 
-## Zeri Download Probe
+## Supported Site Download Probe
 
-Use a known working Zeri summary URL:
+Use a known working supported-site URL. Keep the URL local to the test environment and do not commit private, account-gated, or age-gated URLs into documentation.
 
 ```powershell
 go run -tags playwright ./cmd/task-probe `
-  -url "https://www.zerobywzip.com/..." `
+  -url "https://example.test/supported-gallery" `
   -browser-type firefox `
   -headless=false `
   -download-root ".\runtime\smoke-output" `
@@ -50,31 +50,22 @@ go run -tags playwright ./cmd/task-probe `
 
 Expected:
 
-- The task parses the summary page and reader page.
+- The task dispatches to the expected site flow.
+- Browser-backed sites parse the summary/reader pages through Firefox.
+- Hitomi parses gallery metadata through the HTTP resolver.
 - Images are downloaded under the configured output root and manga title.
 - A task report is written under `runtime\tasks\`.
 - A thumbnail is written under `runtime\thumbnails\`.
 
-## Hentai2 Download Probe
+## Proxy Probe
 
-Use a known working Hentai2 summary URL:
-
-```powershell
-go run -tags playwright ./cmd/task-probe `
-  -url "https://www2.hentai2.net/kento-kun-wa-otona-no-omocha-ni-kyoumi-ga-atta-dake-de-mesu-ochi-suru-tsumori-wa-nakatta-youdesu/" `
-  -browser-type firefox `
-  -headless=false `
-  -download-root ".\runtime\smoke-output" `
-  -output-dir ".\runtime\smoke-output"
-```
+Configure a test proxy from the frontend, then run a supported-site task. For CLI-only checks, persist the proxy in frontend state first or set the process environment before launching the probe.
 
 Expected:
 
-- The task parses the summary title, page count, and `/read/...html` reader URL.
-- Reader images are collected from the `.read1.text-center` area or sequentially expanded from the first image when applicable.
-- Images are downloaded through `siteflow/assets`.
-- A thumbnail is generated through `siteflow/assets`.
-- The result contains `site=hentai2`.
+- Browser navigation uses the configured proxy for browser-backed flows.
+- Backend HTTP downloads use the configured proxy.
+- Empty proxy settings fall back to normal system/environment behavior.
 
 ## Win32 Frontend
 
@@ -87,7 +78,7 @@ go run -tags playwright ./cmd/win32-frontend
 Expected:
 
 - The window opens and restores saved settings.
-- Adding a Zeri or Hentai2 URL creates and starts a task.
+- Adding a supported-site URL creates and starts a task.
 - Duplicate URLs prompt for confirmation.
 - The site filter dropdown can switch between all tasks and site-specific tasks.
 - Right-click task cards expose retry, details, open download directory, copy URL, delete, start, and pause.
@@ -98,7 +89,7 @@ Expected:
 Build and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_portable.ps1
+powershell -File .\scripts\build_portable.ps1
 dist\portable.exe
 ```
 

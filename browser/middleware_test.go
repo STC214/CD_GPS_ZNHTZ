@@ -15,6 +15,7 @@ func TestFirefoxMiddlewareLaunchSpecAndPayload(t *testing.T) {
 	m = m.WithUserAgent("Mozilla/5.0 test agent")
 	m = m.WithFirefoxUserPrefs(map[string]any{"browser.tabs.warnOnClose": false})
 	m = m.WithBrowserPath(`C:\Program Files\Mozilla Firefox\firefox.exe`)
+	m = m.WithProxyServer("socks5://127.0.0.1:1080")
 	m = m.WithHeadless(false)
 	m = m.WithAdblock(true)
 
@@ -47,6 +48,9 @@ func TestFirefoxMiddlewareLaunchSpecAndPayload(t *testing.T) {
 	if spec.Headless {
 		t.Fatalf("LaunchSpec().Headless = true, want false")
 	}
+	if spec.ProxyServer != "socks5://127.0.0.1:1080" {
+		t.Fatalf("LaunchSpec().ProxyServer = %q", spec.ProxyServer)
+	}
 
 	payload := m.Payload(BrowserSessionOptions{Headless: HeadlessPtr(true)})
 	if payload.URL != "https://example.com/page" {
@@ -63,5 +67,8 @@ func TestFirefoxMiddlewareLaunchSpecAndPayload(t *testing.T) {
 	}
 	if payload.UserAgent != "Mozilla/5.0 test agent" {
 		t.Fatalf("Payload().UserAgent = %q", payload.UserAgent)
+	}
+	if payload.ProxyServer != "socks5://127.0.0.1:1080" {
+		t.Fatalf("Payload().ProxyServer = %q", payload.ProxyServer)
 	}
 }

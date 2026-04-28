@@ -25,7 +25,7 @@ Firefox tasks launch from a fresh temporary Playwright profile.
 
 ## Direct browser entry
 
-The browser middleware still accepts these request-time overrides:
+The browser middleware still accepts these request-time overrides for development and tests:
 
 - `profile-dir`
 - `user-data-dir`
@@ -37,6 +37,8 @@ The browser middleware still accepts these request-time overrides:
 - `firefox-user-prefs-json`
 - `headless`
 - `keep-open`
+
+The public task flow creates a fresh temporary profile and does not require copying a real user profile.
 
 ## Task-scoped profile directories
 
@@ -57,15 +59,9 @@ The goal is to keep the browser run reproducible while still starting from a tem
 - The portable build persists settings and history beside the executable in `portable-data/`.
 - When the frontend saves a new Firefox executable path or Playwright driver directory, unfinished task requests are refreshed so retries use the new configuration.
 
-## Useful browser self-check pages
+## Security Notes
 
-These built-in pages are the fastest way to verify which profile a browser is actually using:
-
-- `about:support`
-  - Best for Firefox.
-  - Check `Application Basics -> Profile Directory` to confirm the exact profile directory in use.
-- `about:profiles`
-  - Best for Firefox when you want to inspect all available profiles.
-  - It shows the active profile and its `Root Directory` and `Local Directory`.
-
-Use these pages when you need to confirm that a temporary profile is really the one being consumed by the browser.
+- Keep the fresh temporary profile policy as the default.
+- Do not document workflows that require copying a personal Firefox profile.
+- Avoid storing account credentials or session cookies in project-managed profiles.
+- Temporary profile cleanup happens after the task exits the running state when possible.

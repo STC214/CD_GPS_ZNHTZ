@@ -15,6 +15,7 @@ type BrowserSessionOptions struct {
 	TimezoneID        string         `json:"timezoneId,omitempty"`
 	ViewportWidth     int            `json:"viewportWidth,omitempty"`
 	ViewportHeight    int            `json:"viewportHeight,omitempty"`
+	ProxyServer       string         `json:"proxyServer,omitempty"`
 	FirefoxUserPrefs  map[string]any `json:"firefoxUserPrefs,omitempty"`
 }
 

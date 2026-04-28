@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"comic_downloader_go_playwright_stealth/browser"
+	"comic_downloader_go_playwright_stealth/netproxy"
 	projectruntime "comic_downloader_go_playwright_stealth/runtime"
 	"comic_downloader_go_playwright_stealth/siteflow/hentai2"
 	"comic_downloader_go_playwright_stealth/siteflow/hentaiaz"
@@ -38,6 +39,7 @@ type BrowserLaunchRequest struct {
 	TimezoneID           string                      `json:"timezoneId"`
 	ViewportWidth        int                         `json:"viewportWidth"`
 	ViewportHeight       int                         `json:"viewportHeight"`
+	ProxyServer          string                      `json:"proxyServer"`
 	FirefoxUserPrefsJSON string                      `json:"firefoxUserPrefsJson"`
 	FirefoxUserPrefs     map[string]any              `json:"firefoxUserPrefs"`
 	DownloadRoot         string                      `json:"downloadRoot"`
@@ -155,6 +157,16 @@ func (r BrowserLaunchRequest) Normalize() BrowserLaunchRequest {
 	}
 	r.Locale = strings.TrimSpace(r.Locale)
 	r.TimezoneID = strings.TrimSpace(r.TimezoneID)
+	r.ProxyServer = strings.TrimSpace(r.ProxyServer)
+	if r.ProxyServer == "" && hasFrontendState {
+		r.ProxyServer = strings.TrimSpace(frontendState.ProxyServer)
+	}
+	if r.ProxyServer == "" {
+		r.ProxyServer = strings.TrimSpace(os.Getenv("COMIC_DOWNLOADER_PROXY"))
+	}
+	if normalized, err := netproxy.NormalizeServer(r.ProxyServer); err == nil {
+		r.ProxyServer = normalized
+	}
 	return r
 }
 
@@ -255,6 +267,7 @@ func (r BrowserLaunchRequest) BrowserOptions() browser.BrowserSessionOptions {
 		TimezoneID:        r.TimezoneID,
 		ViewportWidth:     r.ViewportWidth,
 		ViewportHeight:    r.ViewportHeight,
+		ProxyServer:       r.ProxyServer,
 		FirefoxUserPrefs:  r.FirefoxUserPrefs,
 	}
 }
@@ -285,6 +298,7 @@ func (r BrowserLaunchRequest) FirefoxMiddleware() browser.FirefoxMiddleware {
 		WithLocale(r.Locale).
 		WithTimezoneID(r.TimezoneID).
 		WithViewport(r.ViewportWidth, r.ViewportHeight).
+		WithProxyServer(r.ProxyServer).
 		WithFirefoxUserPrefs(r.FirefoxUserPrefs).
 		WithDownloadRoot(r.DownloadRoot).
 		WithOutputDir(r.OutputDir).

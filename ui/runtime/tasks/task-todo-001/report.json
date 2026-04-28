@@ -2,13 +2,13 @@
   "taskID": "todo-001",
   "manifest": {
     "site": "",
-    "title": "ok",
+    "title": "https://example.com",
     "primaryURL": "https://example.com",
     "assetCount": 0,
     "blocked": false
   },
-  "state": "completed",
-  "verification": "completed",
+  "state": "paused",
+  "verification": "paused",
   "outputRoot": "runtime\\output",
   "thumbnailRoot": "runtime\\thumbnails",
   "thumbnailPath": ".",
@@ -18,8 +18,8 @@
   "storageState": "",
   "verificationState": "",
   "initScript": "",
-  "createdAt": "2026-04-27T06:55:23.820659Z",
-  "startedAt": "2026-04-27T06:55:23.820659Z",
-  "finishedAt": "2026-04-27T06:55:23.820659Z",
-  "lastError": ""
+  "createdAt": "2026-04-28T12:05:50.1377269Z",
+  "startedAt": "2026-04-28T12:05:50.1377269Z",
+  "finishedAt": "2026-04-28T12:05:50.1377269Z",
+  "lastError": "context canceled"
 }

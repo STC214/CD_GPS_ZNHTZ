@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"comic_downloader_go_playwright_stealth/netproxy"
 )
 
 const maxDownloadWorkers = 7
@@ -25,11 +27,12 @@ const hitomiImageDownloadAttempts = 20
 
 // CollectionSummary is the site-neutral metadata needed to name a download batch.
 type CollectionSummary struct {
-	Site      string `json:"site,omitempty"`
-	BaseURL   string `json:"baseURL,omitempty"`
-	Title     string `json:"title"`
-	PageCount int    `json:"pageCount,omitempty"`
-	ReaderURL string `json:"readerURL,omitempty"`
+	Site        string `json:"site,omitempty"`
+	BaseURL     string `json:"baseURL,omitempty"`
+	Title       string `json:"title"`
+	PageCount   int    `json:"pageCount,omitempty"`
+	ReaderURL   string `json:"readerURL,omitempty"`
+	ProxyServer string `json:"proxyServer,omitempty"`
 }
 
 // DownloadProgress reports the status of reader image downloads.
@@ -108,6 +111,10 @@ func DownloadImagesContext(ctx context.Context, summary CollectionSummary, image
 	report(0, "downloading", "prepare")
 	workerCount := downloadWorkerCount(len(imageURLs))
 	log.Printf("asset download begin: site=%s images=%d workers=%d", summary.Site, len(imageURLs), workerCount)
+	httpClient, err := netproxy.NewHTTPClient(summary.ProxyServer, 0)
+	if err != nil {
+		return DownloadResult{}, err
+	}
 
 	type job struct {
 		index int
@@ -147,7 +154,7 @@ func DownloadImagesContext(ctx context.Context, summary CollectionSummary, image
 						return
 					}
 					log.Printf("asset download image start: site=%s worker=%d %d/%d url=%s", summary.Site, workerID, item.index+1, len(imageURLs), item.url)
-					saved, written, err := downloadOneImage(ctx, item.url, chapterDir, item.index+1, &usedNamesMu, usedNames)
+					saved, written, err := downloadOneImage(ctx, httpClient, item.url, chapterDir, item.index+1, &usedNamesMu, usedNames)
 					if err != nil {
 						setErr(err)
 						return
@@ -203,7 +210,7 @@ func downloadWorkerCount(imageCount int) int {
 	return maxDownloadWorkers
 }
 
-func downloadOneImage(ctx context.Context, rawURL, outputDir string, index int, usedNamesMu *sync.Mutex, usedNames map[string]int) (string, int64, error) {
+func downloadOneImage(ctx context.Context, httpClient *http.Client, rawURL, outputDir string, index int, usedNamesMu *sync.Mutex, usedNames map[string]int) (string, int64, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return "", 0, fmt.Errorf("image url is empty")
@@ -213,7 +220,7 @@ func downloadOneImage(ctx context.Context, rawURL, outputDir string, index int, 
 		return "", 0, fmt.Errorf("parse image url %q: %w", rawURL, err)
 	}
 
-	resp, err := downloadImageResponse(ctx, rawURL, parsed)
+	resp, err := downloadImageResponse(ctx, httpClient, rawURL, parsed)
 	if err != nil {
 		return "", 0, err
 	}
@@ -252,7 +259,10 @@ func downloadOneImage(ctx context.Context, rawURL, outputDir string, index int, 
 	return targetPath, written, nil
 }
 
-func downloadImageResponse(ctx context.Context, rawURL string, parsed *url.URL) (*http.Response, error) {
+func downloadImageResponse(ctx context.Context, httpClient *http.Client, rawURL string, parsed *url.URL) (*http.Response, error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	attempts := defaultImageDownloadAttempts
 	hitomiCDN := needsHitomiReferer(parsed)
 	if hitomiCDN {
@@ -271,7 +281,7 @@ func downloadImageResponse(ctx context.Context, rawURL string, parsed *url.URL) 
 		if hitomiCDN {
 			req.Header.Set("Referer", "https://hitomi.la/")
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("download image %q: %w", rawURL, err)
 			if attempt < attempts {
@@ -380,33 +390,29 @@ func SanitizePathPart(text string) string {
 	}
 	var b strings.Builder
 	b.Grow(len(text))
+	limit := 0
+	if len([]rune(text)) > 128 {
+		limit = 64
+	}
 	count := 0
-	lastUnderscore := false
 	for _, r := range text {
-		if count >= 64 {
+		if limit > 0 && count >= limit {
 			break
 		}
-		out := '_'
-		switch {
-		case unicode.IsLetter(r), unicode.IsNumber(r):
-			out = r
-		case r == ' ' || r == '-' || r == '_' || r == '.':
-			out = '_'
-		default:
-			out = '_'
-		}
-		if out == '_' {
-			if lastUnderscore {
-				continue
-			}
-			lastUnderscore = true
-		} else {
-			lastUnderscore = false
-		}
-		b.WriteRune(out)
+		b.WriteRune(sanitizeWindowsPathRune(r))
 		count++
 	}
-	return strings.Trim(b.String(), "_")
+	return strings.TrimSpace(strings.Trim(b.String(), "."))
+}
+
+func sanitizeWindowsPathRune(r rune) rune {
+	if r < 32 || strings.ContainsRune(`\/:*?"<>|`, r) {
+		return '_'
+	}
+	if unicode.IsControl(r) {
+		return '_'
+	}
+	return r
 }
 
 // SelectThumbnailSource picks the best downloaded file for the task thumbnail.

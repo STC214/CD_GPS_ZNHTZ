@@ -8,6 +8,7 @@ This document describes the current Win32 UI and task contract.
 - `downloadRoot` / `outputDir`
 - Firefox executable path
 - Playwright driver directory
+- Optional project proxy server
 
 ## Task Lifecycle
 
@@ -29,11 +30,11 @@ Current frontend behavior:
 - Clicking `添加任务` starts the task immediately.
 - Duplicate tasks are detected by `URL + browser type` and prompt before adding.
 - `Start all unfinished tasks` respects the configured concurrency value.
-- `myreadingmanga.info` is blocked at add time and shows `暂不支持此站点`.
+- `myreadingmanga.info` is blocked at add time and shows an unsupported-site message.
 - The task-list site filter is a dropdown beside `任务列表`.
 - The dropdown includes `显示全部`, `Zeri`, `Nyahentai`, `Hentai2`, `Hentaiaz`, and `Hitomi`.
-- Active download flows currently exist for `zeri`, `hentai2`, `hentaiaz`, and `nyahentai`.
-- `hitomi` is currently a UI/history filter placeholder until its siteflow package is implemented.
+- Active download flows currently exist for `zeri`, `hentai2`, `hentaiaz`, `nyahentai`, and `hitomi`.
+- The proxy setting is optional. When configured, unfinished task requests are refreshed so retries use the new proxy.
 
 ## Runtime Files
 
@@ -66,17 +67,18 @@ The portable launcher creates temporary unpack directories inside `portable-data
 - The frontend persists window placement and current settings on exit.
 - The frontend persists the current task list to the legacy history file on exit, so restart can restore current tasks.
 - The browser menu includes Firefox executable and Playwright driver directory pickers.
-- After Firefox or driver settings are changed, unfinished task requests are refreshed with the new browser settings.
-- Failed tasks that were created before the browser or driver was configured can be retried directly after settings are saved.
+- The settings menu includes a project proxy entry.
+- After Firefox, driver, download directory, concurrency, progress refresh interval, or proxy settings are changed, unfinished task requests are refreshed with the new settings.
+- Failed tasks that were created before Firefox or driver was configured can be retried directly after settings are saved.
 - Task cards prefer the resolved manga title from the task result.
 - The URL input uses a cue banner placeholder.
 
 ## Browser Data Flow
 
 - The browser layer resolves a launch spec before launch.
-- The launch spec includes browser type, browser path, install root, driver dir, temporary profile path, headless, keep-open, locale, timezone, viewport, and user-agent.
+- The launch spec includes browser type, browser path, install root, driver dir, temporary profile path, headless, keep-open, locale, timezone, viewport, user-agent, and optional proxy server.
 - Firefox task runs use a fresh temporary Playwright profile per task.
-- Browser middleware owns stealth injection, Firefox user prefs, adblock loading, and launch defaults.
+- Browser middleware owns stealth injection, Firefox user prefs, adblock loading, proxy propagation, and launch defaults.
 - The `task-probe` CLI remains the current browser smoke-test entry point.
 
 ## Site Flow
@@ -85,7 +87,7 @@ The portable launcher creates temporary unpack directories inside `portable-data
 frontend addPendingTask
 -> ui.TodoList.RunImmediately
 -> tasks.RunBrowserRequest
--> zeri / hentai2 / hentaiaz / nyahentai URL dispatch
+-> zeri / hentai2 / hentaiaz / nyahentai / hitomi URL dispatch
 -> site parser resolves title, page count, reader URL, image URLs
 -> siteflow/assets downloads images and creates thumbnail
 -> BrowserRunResult updates the frontend task card
@@ -95,14 +97,16 @@ Active site contracts:
 
 - `zeri`: documented in [`zeri_flow_rules.md`](zeri_flow_rules.md).
 - `hentai2`: documented in [`hentai2_flow_rules.md`](hentai2_flow_rules.md).
-- `hentaiaz`: follows the Hentai2-style reader image collection, with Hentaiaz-specific summary selectors.
-- `nyahentai`: direct reader URL flow; page count is derived from the lazy-loaded filtered image count.
+- `hentaiaz`: documented in [`hentaiaz_flow_rules.md`](hentaiaz_flow_rules.md).
+- `nyahentai`: documented in [`nyahentai_flow_rules.md`](nyahentai_flow_rules.md).
+- `hitomi`: documented in [`hitomi_flow_rules.md`](hitomi_flow_rules.md); uses backend HTTP parsing and does not launch Playwright.
 
 Shared asset contract:
 
 - `siteflow/assets.DownloadImages` downloads images to `<output>/<manga-title>/`.
 - `siteflow/assets.SelectThumbnailSource` chooses the best first-page candidate.
 - `siteflow/assets.CreateJPGThumbnail` creates the task-card thumbnail.
+- `siteflow/assets` uses the task proxy setting for backend HTTP image downloads.
 
 ## Progress
 
@@ -111,10 +115,3 @@ Shared asset contract:
 - Downloads are mapped into the final progress span based on the expected page count.
 - The frontend coalesces rapid progress updates. The default refresh interval is `80ms`.
 - The interval can be changed from the progress refresh menu and is persisted in frontend state.
-
-## Browser Verification Pages
-
-Use these Firefox pages when you need to verify the active profile:
-
-- `about:support`: check `Application Basics -> Profile Directory`.
-- `about:profiles`: inspect all profiles and the active profile.

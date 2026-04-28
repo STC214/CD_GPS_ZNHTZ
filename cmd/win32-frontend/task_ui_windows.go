@@ -54,12 +54,15 @@ type concurrencyPromptState struct {
 	owner       HWND
 	hwnd        HWND
 	edit        HWND
-	value       int
+	value       string
 	result      int
+	textResult  string
 	ok          bool
 	done        chan struct{}
 	windowTitle string
 	labelText   string
+	allowEmpty  bool
+	integerOnly bool
 }
 
 func registerConcurrencyPromptClass(hInstance HINSTANCE) error {
@@ -94,10 +97,11 @@ func promptIntegerDialog(owner HWND, current int, windowTitle, labelText string)
 	}
 	state := &concurrencyPromptState{
 		owner:       owner,
-		value:       current,
+		value:       strconv.Itoa(current),
 		done:        make(chan struct{}),
 		windowTitle: windowTitle,
 		labelText:   labelText,
+		integerOnly: true,
 	}
 	className, _ := utf16Ptr(promptClass)
 	title, _ := utf16Ptr(windowTitle)
@@ -172,16 +176,19 @@ func concurrencyPromptWindowProc(hwnd HWND, msg uint32, wParam, lParam uintptr) 
 		switch id {
 		case 1:
 			text := strings.TrimSpace(getControlText(state.edit))
-			if text == "" {
+			if text == "" && !state.allowEmpty {
 				msgBox(hwnd, "\u8bf7\u8f93\u5165\u5e76\u53d1\u6570", "\u63d0\u793a")
 				return 0
 			}
-			n, err := strconv.Atoi(text)
-			if err != nil || n <= 0 {
-				msgBox(hwnd, "\u5e76\u53d1\u6570\u5fc5\u987b\u662f\u6b63\u6574\u6570", "\u63d0\u793a")
-				return 0
+			if state.integerOnly {
+				n, err := strconv.Atoi(text)
+				if err != nil || n <= 0 {
+					msgBox(hwnd, "\u5e76\u53d1\u6570\u5fc5\u987b\u662f\u6b63\u6574\u6570", "\u63d0\u793a")
+					return 0
+				}
+				state.result = n
 			}
-			state.result = n
+			state.textResult = text
 			state.ok = true
 			procDestroyWindow.Call(uintptr(hwnd))
 			return 0
@@ -217,7 +224,7 @@ func createConcurrencyPromptControls(hwnd HWND, state *concurrencyPromptState) {
 		id    int
 	}{
 		{class: "Static", text: state.labelText, x: 18, y: 18, w: 300, h: 20, id: 1001},
-		{class: "Edit", text: strconv.Itoa(max(1, state.value)), x: 18, y: 44, w: 304, h: 28, id: 1002},
+		{class: "Edit", text: state.value, x: 18, y: 44, w: 304, h: 28, id: 1002},
 		{class: "Button", text: "\u786e\u5b9a", x: 138, y: 84, w: 80, h: 28, id: 1},
 		{class: "Button", text: "\u53d6\u6d88", x: 232, y: 84, w: 80, h: 28, id: 2},
 	}
@@ -245,6 +252,68 @@ func createConcurrencyPromptControls(hwnd HWND, state *concurrencyPromptState) {
 		setControlFont(HWND(hwndChild), uiFont)
 		if c.id == 1002 {
 			state.edit = HWND(hwndChild)
+		}
+	}
+}
+
+func promptTextDialog(owner HWND, current, windowTitle, labelText string, allowEmpty bool) (string, bool) {
+	hInstance, _, _ := procGetModuleHandleW.Call(0)
+	if err := registerConcurrencyPromptClass(HINSTANCE(hInstance)); err != nil {
+		return "", false
+	}
+	state := &concurrencyPromptState{
+		owner:       owner,
+		value:       current,
+		done:        make(chan struct{}),
+		windowTitle: windowTitle,
+		labelText:   labelText,
+		allowEmpty:  allowEmpty,
+	}
+	className, _ := utf16Ptr(promptClass)
+	title, _ := utf16Ptr(windowTitle)
+	hwnd, _, err := procCreateWindowExW.Call(
+		WS_EX_DLGMODALFRAME,
+		uintptr(unsafe.Pointer(className)),
+		uintptr(unsafe.Pointer(title)),
+		WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+		CW_USEDEFAULT,
+		CW_USEDEFAULT,
+		440,
+		180,
+		uintptr(owner),
+		0,
+		hInstance,
+		uintptr(unsafe.Pointer(state)),
+	)
+	if hwnd == 0 {
+		log.Printf("create text prompt failed: %v", err)
+		return "", false
+	}
+	state.hwnd = HWND(hwnd)
+	if owner != 0 {
+		procEnableWindow.Call(uintptr(owner), 0)
+		defer procEnableWindow.Call(uintptr(owner), 1)
+	}
+	for {
+		select {
+		case <-state.done:
+			if state.ok {
+				return state.textResult, true
+			}
+			return "", false
+		default:
+		}
+		var msg MSG
+		r, _, err := procGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
+		switch int32(r) {
+		case -1:
+			log.Printf("text prompt message loop failed: %v", err)
+			return "", false
+		case 0:
+			return "", false
+		default:
+			procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 		}
 	}
 }

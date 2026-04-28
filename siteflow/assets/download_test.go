@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -71,5 +72,31 @@ func TestDownloadWorkerCount(t *testing.T) {
 		if got := downloadWorkerCount(tt.images); got != tt.want {
 			t.Fatalf("downloadWorkerCount(%d) = %d, want %d", tt.images, got, tt.want)
 		}
+	}
+}
+
+func TestDownloadWorkerCountForHitomiTargetImages(t *testing.T) {
+	if got := downloadWorkerCount(40); got != 7 {
+		t.Fatalf("downloadWorkerCount(40) = %d, want 7", got)
+	}
+}
+
+func TestSanitizePathPartUsesWindowsDirectoryRules(t *testing.T) {
+	got := SanitizePathPart(`A:B/C\D*E?F"G<H>I|J [] 漫画`)
+	want := `A_B_C_D_E_F_G_H_I_J [] 漫画`
+	if got != want {
+		t.Fatalf("SanitizePathPart() = %q, want %q", got, want)
+	}
+}
+
+func TestSanitizePathPartTruncatesOnlyAfter128Characters(t *testing.T) {
+	short := strings.Repeat("a", 128)
+	if got := SanitizePathPart(short); got != short {
+		t.Fatalf("128 char title changed: len=%d value=%q", len([]rune(got)), got)
+	}
+	long := strings.Repeat("漫", 129)
+	got := SanitizePathPart(long)
+	if len([]rune(got)) != 64 {
+		t.Fatalf("long title length = %d, want 64", len([]rune(got)))
 	}
 }

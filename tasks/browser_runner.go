@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"comic_downloader_go_playwright_stealth/netproxy"
 	projectruntime "comic_downloader_go_playwright_stealth/runtime"
 	"comic_downloader_go_playwright_stealth/siteflow/assets"
 	"comic_downloader_go_playwright_stealth/siteflow/hentai2"
@@ -156,11 +158,12 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 			return BrowserRunResult{}, err
 		}
 		assetSummary = assets.CollectionSummary{
-			Site:      site,
-			BaseURL:   zeriResult.Summary.BaseURL,
-			Title:     zeriResult.Summary.Title,
-			PageCount: zeriResult.Summary.PageCount,
-			ReaderURL: zeriResult.Summary.ReaderURL,
+			Site:        site,
+			BaseURL:     zeriResult.Summary.BaseURL,
+			Title:       zeriResult.Summary.Title,
+			PageCount:   zeriResult.Summary.PageCount,
+			ReaderURL:   zeriResult.Summary.ReaderURL,
+			ProxyServer: req.ProxyServer,
 		}
 		imageURLs = zeriResult.CollectedImages
 	} else if hentai2.IsHentai2URL(req.URL) {
@@ -176,11 +179,12 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 			return BrowserRunResult{}, err
 		}
 		assetSummary = assets.CollectionSummary{
-			Site:      site,
-			BaseURL:   hentai2Result.Summary.BaseURL,
-			Title:     hentai2Result.Summary.Title,
-			PageCount: hentai2Result.Summary.PageCount,
-			ReaderURL: hentai2Result.Summary.ReaderURL,
+			Site:        site,
+			BaseURL:     hentai2Result.Summary.BaseURL,
+			Title:       hentai2Result.Summary.Title,
+			PageCount:   hentai2Result.Summary.PageCount,
+			ReaderURL:   hentai2Result.Summary.ReaderURL,
+			ProxyServer: req.ProxyServer,
 		}
 		imageURLs = hentai2Result.CollectedImages
 	} else if hentaiaz.IsHentaiazURL(req.URL) {
@@ -196,11 +200,12 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 			return BrowserRunResult{}, err
 		}
 		assetSummary = assets.CollectionSummary{
-			Site:      site,
-			BaseURL:   hentaiazResult.Summary.BaseURL,
-			Title:     hentaiazResult.Summary.Title,
-			PageCount: hentaiazResult.Summary.PageCount,
-			ReaderURL: hentaiazResult.Summary.ReaderURL,
+			Site:        site,
+			BaseURL:     hentaiazResult.Summary.BaseURL,
+			Title:       hentaiazResult.Summary.Title,
+			PageCount:   hentaiazResult.Summary.PageCount,
+			ReaderURL:   hentaiazResult.Summary.ReaderURL,
+			ProxyServer: req.ProxyServer,
 		}
 		imageURLs = hentaiazResult.CollectedImages
 	} else if nyahentai.IsNyahentaiURL(req.URL) {
@@ -216,11 +221,12 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 			return BrowserRunResult{}, err
 		}
 		assetSummary = assets.CollectionSummary{
-			Site:      site,
-			BaseURL:   nyahentaiResult.Reader.BaseURL,
-			Title:     nyahentaiResult.Reader.Title,
-			PageCount: nyahentaiResult.PageCount,
-			ReaderURL: nyahentaiResult.Reader.URL,
+			Site:        site,
+			BaseURL:     nyahentaiResult.Reader.BaseURL,
+			Title:       nyahentaiResult.Reader.Title,
+			PageCount:   nyahentaiResult.PageCount,
+			ReaderURL:   nyahentaiResult.Reader.URL,
+			ProxyServer: req.ProxyServer,
 		}
 		imageURLs = nyahentaiResult.CollectedImages
 	}
@@ -285,7 +291,15 @@ func runHitomiRequest(ctx context.Context, req BrowserLaunchRequest, runtimePath
 	if req.Progress != nil {
 		req.Progress(zeri.DownloadProgress{Fraction: 0.02, Phase: "start", Message: "hitomi"})
 	}
-	hitomiResult, err := hitomi.ExecuteWithProgress(ctx, req.URL, progressSpan(req.Progress, 0.02, 0.08))
+	hitomiClient := hitomi.NewClient()
+	if strings.TrimSpace(req.ProxyServer) != "" {
+		httpClient, clientErr := netproxy.NewHTTPClient(req.ProxyServer, 20*time.Second)
+		if clientErr != nil {
+			return BrowserRunResult{}, clientErr
+		}
+		hitomiClient.HTTPClient = httpClient
+	}
+	hitomiResult, err := hitomi.ExecuteWithClient(ctx, hitomiClient, req.URL, progressSpan(req.Progress, 0.02, 0.08))
 	if err != nil {
 		return BrowserRunResult{}, err
 	}
@@ -294,11 +308,12 @@ func runHitomiRequest(ctx context.Context, req BrowserLaunchRequest, runtimePath
 		return BrowserRunResult{}, fmt.Errorf("hitomi target images not found")
 	}
 	assetSummary := assets.CollectionSummary{
-		Site:      "hitomi",
-		BaseURL:   hitomiResult.FinalURL,
-		Title:     hitomiResult.FinalTitle,
-		PageCount: hitomiResult.PageCount,
-		ReaderURL: hitomiResult.FinalURL,
+		Site:        "hitomi",
+		BaseURL:     hitomiResult.FinalURL,
+		Title:       hitomiResult.FinalTitle,
+		PageCount:   hitomiResult.PageCount,
+		ReaderURL:   hitomiResult.FinalURL,
+		ProxyServer: req.ProxyServer,
 	}
 	var downloadResult assets.DownloadResult
 	var thumbnailPath string

@@ -1,73 +1,70 @@
 # Comic Downloader
 
-一个基于 Go + Playwright 的 Windows 漫画下载器。Win32 前端负责添加和管理任务，任务层使用 Playwright 打开页面，站点解析器负责提取图片 URL，通用资源层负责下载图片并生成缩略图。
+A Windows comic downloader built with Go, Playwright Firefox, and a native Win32 frontend.
 
-## 当前状态
+The application accepts comic page URLs, resolves site-specific image sources, downloads the target images, writes task reports, and creates task-card thumbnails.
 
-- 浏览器路线：公共 UI 和任务层统一使用 Firefox。
-- 已接入站点：`zeri`、`hentai2`。
-- 前端站点筛选：任务列表标题旁的下拉菜单支持 `显示全部`、`Zeri`、`Nyahentai`、`Hentai2`、`Hentaiaz`、`Hitomi`。
-- `nyahentai`、`hentaiaz`、`hitomi` 当前只完成前端筛选占位和历史任务识别，下载流程尚未接入。
-- 暂不支持站点：`myreadingmanga.info`，前端添加任务时会提示 `暂不支持此站点`。
-- 下载与缩略图：所有站点统一走 `siteflow/assets` 的下载和缩略图逻辑。
-- 便携版：单文件 `dist\portable.exe`，持久数据写入同级 `portable-data\`。
-- Firefox 和 Playwright driver 设置成功后，会自动刷新未完成任务中的浏览器相关配置，之前失败的任务可以直接重试。
+## Current Status
 
-## 快速开始
+- Public UI: Win32 desktop frontend.
+- Browser runtime: Firefox through Playwright.
+- Browser profile policy: fresh temporary profile per task, cleaned after the task leaves the running state.
+- Active site flows:
+  - `zeri`
+  - `hentai2`
+  - `hentaiaz`
+  - `nyahentai`
+  - `hitomi`
+- Unsupported site blocked at add time:
+  - `myreadingmanga.info`
+- Shared asset pipeline:
+  - `siteflow/assets` downloads all resolved image URLs.
+  - The download stage uses adaptive workers up to 7 concurrent image downloads.
+  - Thumbnails are generated as JPG files for the task board.
+- Portable build:
+  - Single file: `dist\portable.exe`
+  - Persistent data: `dist\portable-data\`
 
-运行测试：
+## Quick Start
+
+Run tests:
 
 ```powershell
+$env:GOTMPDIR=(Join-Path (Get-Location) '.gotmp')
+$env:GOCACHE=(Join-Path (Get-Location) '.gocache')
 go test ./...
 ```
 
-运行 Win32 前端：
+Run the Win32 frontend:
 
 ```powershell
 go run -tags playwright ./cmd/win32-frontend
 ```
 
-运行任务探针：
+Run a visible task probe:
 
 ```powershell
-go run -tags playwright ./cmd/task-probe -url "https://www.zerobywzip.com/..." -headless=false -keep-open=false
+go run -tags playwright ./cmd/task-probe `
+  -url "https://example.com" `
+  -headless=false `
+  -keep-open=true
 ```
 
-构建便携版：
+Build the portable single-file executable:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_portable.ps1
+powershell -File .\scripts\build_portable.ps1
 ```
 
-运行便携版：
+Run the portable build:
 
 ```powershell
 dist\portable.exe
 ```
 
-## 运行环境
+## Runtime Layout
 
-- Go：`go.mod` 声明 `go 1.24.0`。
-- 平台：Windows，主前端使用 Win32 API。
-- Playwright：通过 `github.com/playwright-community/playwright-go` 调用。
-- 默认 Firefox 可执行文件：`C:\Program Files\Mozilla Firefox\firefox.exe`。
-- 默认 Playwright 浏览器根目录：`runtime\playwright-browsers\`。
-- 默认 Playwright driver 目录：`runtime\playwright-browsers\driver\`。
-
-本地开发时可在前端菜单中设置 Firefox 可执行文件和 Playwright driver 目录。任务启动时会读取保存后的前端状态；如果未完成任务是在设置路径前创建的，设置成功后前端会自动刷新这些任务的浏览器和 driver 字段。
-
-## 常用环境变量
-
-- `COMIC_DOWNLOADER_WORKSPACE_ROOT`：覆盖工作区根目录，便携启动器会把它设为 `portable-data\`。
-- `COMIC_DOWNLOADER_RUNTIME_ROOT`：覆盖运行时根目录。
-- `COMIC_DOWNLOADER_DOWNLOAD_DIR`：覆盖默认下载目录。
-- `COMIC_DOWNLOADER_FRONTEND_STATE_PATH`：覆盖前端设置文件路径。
-- `COMIC_DOWNLOADER_STATE_PATH`：覆盖旧版历史/任务状态文件路径。
-- `COMIC_FIREFOX_PROFILE_SOURCE_DIR`：覆盖 Firefox 源 profile 目录。
-
-## 运行时目录
-
-普通工作区默认写入 `runtime\`：
+Normal development runs use `runtime\`:
 
 - `runtime\tasks\task-<id>\report.json`
 - `runtime\logs\`
@@ -75,33 +72,106 @@ dist\portable.exe
 - `runtime\thumbnails\task-<id>\thumb.jpg`
 - `runtime\browser-profiles\`
 - `runtime\frontend_state.json`
+- `runtime\comic_downloader_state.json`
 
-便携版默认写入 `portable-data\`：
+Portable runs use `dist\portable-data\`:
 
-- `portable-data\tasks\task-<id>\report.json`
-- `portable-data\logs\`
-- `portable-data\output\`
-- `portable-data\thumbnails\`
-- `portable-data\browser-profiles\`
-- `portable-data\frontend_state.json`
-- `portable-data\comic_downloader_state.json`
+- `dist\portable-data\tasks\task-<id>\report.json`
+- `dist\portable-data\logs\`
+- `dist\portable-data\output\`
+- `dist\portable-data\thumbnails\`
+- `dist\portable-data\browser-profiles\`
+- `dist\portable-data\frontend_state.json`
+- `dist\portable-data\comic_downloader_state.json`
 
-## 当前任务路径
+The portable launcher extracts a temporary payload into `dist\portable-data\payload-*` while it is running and removes that payload directory on exit.
+
+## Browser And Driver Paths
+
+The frontend can configure:
+
+- Firefox executable path.
+- Playwright browser root.
+- Playwright driver directory.
+
+If the browser and driver are both under one Playwright root such as:
 
 ```text
-前端 addPendingTask
--> ui.TodoList.RunImmediately
--> tasks.RunBrowserRequest
--> zeri / hentai2 按 URL 分发
--> siteflow/assets 统一下载和缩略图
--> BrowserRunResult 回填前端任务列表
+D:\Program\playwright-browsers
 ```
 
-## 文档索引
+selecting that root lets the frontend auto-detect the Firefox executable and `driver` directory.
 
-- [项目审计](docs/PROJECT_AUDIT.md)
-- [界面与任务流](docs/INTERFACE_FLOW.md)
-- [浏览器 Profile 流程](docs/browser_profile_flow.md)
-- [Zeri 流程规则](docs/zeri_flow_rules.md)
-- [Hentai2 流程规则](docs/hentai2_flow_rules.md)
-- [手工冒烟测试](docs/SMOKE_TESTS.md)
+Changing Firefox or driver settings refreshes unfinished tasks so retrying a failed task uses the new runtime configuration.
+
+## Environment Variables
+
+- `COMIC_DOWNLOADER_WORKSPACE_ROOT`: override workspace root.
+- `COMIC_DOWNLOADER_RUNTIME_ROOT`: override runtime root.
+- `COMIC_DOWNLOADER_DOWNLOAD_DIR`: override default output directory.
+- `COMIC_DOWNLOADER_FRONTEND_STATE_PATH`: override frontend settings path.
+- `COMIC_DOWNLOADER_STATE_PATH`: override legacy task-history state path.
+- `PLAYWRIGHT_BROWSERS_PATH`: override Playwright browser root.
+- `PLAYWRIGHT_DRIVER_PATH`: override Playwright driver path.
+- `COMIC_DOWNLOADER_PROXY`: optional HTTP/HTTPS/SOCKS proxy for backend HTTP downloads when the frontend setting is empty.
+
+## Site Flow Summary
+
+```text
+frontend addPendingTask
+-> ui.TodoList.RunImmediately
+-> tasks.RunBrowserRequest
+-> site-specific parser or HTTP resolver
+-> siteflow/assets downloads target images
+-> siteflow/assets creates task thumbnail
+-> BrowserRunResult updates task history and frontend cards
+```
+
+Browser-backed site flows:
+
+- `zeri`
+- `hentai2`
+- `hentaiaz`
+- `nyahentai`
+
+HTTP resolver site flow:
+
+- `hitomi`
+
+Hitomi does not need Playwright for parsing. It resolves `galleries/{id}.js`, applies the Hitomi `gg.js` hash rules, generates CDN image URLs, and then hands the image list to the shared download pipeline.
+
+## Proxy Policy
+
+Proxy settings are optional. When configured from the frontend, the same normalized proxy value is used by browser-backed flows and backend HTTP downloads. When the setting is empty, browser and HTTP clients use their normal default behavior.
+
+Supported proxy schemes are:
+
+- `http`
+- `https`
+- `socks4`
+- `socks4a`
+- `socks5`
+- `socks5h`
+
+## Reference Source
+
+The local reference checkout is intentionally ignored by git:
+
+```text
+references\hitomi-downloader\
+```
+
+It is used only to compare Hitomi's parsing and image URL rules. Do not copy its repository files into this project wholesale.
+
+## Documentation Index
+
+- [Project audit](docs/PROJECT_AUDIT.md)
+- [Security review](docs/SECURITY_REVIEW.md)
+- [Interface flow](docs/INTERFACE_FLOW.md)
+- [Browser profile flow](docs/browser_profile_flow.md)
+- [Zeri flow rules](docs/zeri_flow_rules.md)
+- [Hentai2 flow rules](docs/hentai2_flow_rules.md)
+- [Hentaiaz flow rules](docs/hentaiaz_flow_rules.md)
+- [Nyahentai flow rules](docs/nyahentai_flow_rules.md)
+- [Hitomi flow rules](docs/hitomi_flow_rules.md)
+- [Smoke tests](docs/SMOKE_TESTS.md)

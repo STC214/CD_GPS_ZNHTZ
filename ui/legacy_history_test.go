@@ -3,6 +3,8 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -126,4 +128,37 @@ func TestExportLegacyComicDownloaderState(t *testing.T) {
 		t.Fatalf("loaded.Tasks[1].Title = %q, want Comic B", loaded.Tasks[1].Title)
 	}
 	_ = item
+}
+
+func TestImportLegacyComicDownloaderStateWithProgress(t *testing.T) {
+	list := NewTodoList()
+	list.SetRuntimeRoot(t.TempDir())
+	list.AddPending(tasks.BrowserLaunchRequest{
+		URL:         "https://example.com/b",
+		BrowserType: "firefox",
+	})
+
+	var events []string
+	count := list.ImportLegacyComicDownloaderStateWithProgress(projectruntime.LegacyComicDownloaderState{
+		Tasks: []projectruntime.LegacyComicDownloaderTask{
+			{ID: 1, URL: "https://example.com/a", Worker: "nyahentai", State: "done", Percent: 1},
+			{ID: 2, URL: "https://example.com/b", Worker: "nyahentai", State: "done", Percent: 1},
+		},
+	}, func(current, total int, phase string) {
+		events = append(events, phase+":"+strconv.Itoa(current)+"/"+strconv.Itoa(total))
+	})
+
+	if count != 1 {
+		t.Fatalf("ImportLegacyComicDownloaderStateWithProgress() count = %d, want 1", count)
+	}
+	want := []string{
+		"convert:0/2",
+		"convert:1/2",
+		"convert:2/2",
+		"report:0/1",
+		"report:1/1",
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("progress events = %#v, want %#v", events, want)
+	}
 }
