@@ -24,6 +24,8 @@ import (
 const maxDownloadWorkers = 7
 const defaultImageDownloadAttempts = 4
 const hitomiImageDownloadAttempts = 20
+const maxImageDownloadBytes int64 = 128 << 20
+const imageDownloadTimeout = 2 * time.Minute
 
 // CollectionSummary is the site-neutral metadata needed to name a download batch.
 type CollectionSummary struct {
@@ -37,11 +39,14 @@ type CollectionSummary struct {
 
 // DownloadProgress reports the status of reader image downloads.
 type DownloadProgress struct {
-	Current  int     `json:"current"`
-	Total    int     `json:"total"`
-	Phase    string  `json:"phase,omitempty"`
-	Message  string  `json:"message,omitempty"`
-	Fraction float64 `json:"fraction"`
+	Current               int     `json:"current"`
+	Total                 int     `json:"total"`
+	Phase                 string  `json:"phase,omitempty"`
+	Message               string  `json:"message,omitempty"`
+	Fraction              float64 `json:"fraction"`
+	Bytes                 int64   `json:"bytes,omitempty"`
+	BytesPerSecond        float64 `json:"bytesPerSecond,omitempty"`
+	AverageBytesPerSecond float64 `json:"averageBytesPerSecond,omitempty"`
 }
 
 // DownloadProgressFunc receives download progress updates.
@@ -49,9 +54,11 @@ type DownloadProgressFunc func(DownloadProgress)
 
 // DownloadResult summarizes a batch of downloaded reader images.
 type DownloadResult struct {
-	OutputDir string   `json:"outputDir"`
-	Files     []string `json:"files,omitempty"`
-	Bytes     int64    `json:"bytes"`
+	OutputDir             string        `json:"outputDir"`
+	Files                 []string      `json:"files,omitempty"`
+	Bytes                 int64         `json:"bytes"`
+	Duration              time.Duration `json:"duration,omitempty"`
+	AverageBytesPerSecond float64       `json:"averageBytesPerSecond,omitempty"`
 }
 
 // DownloadImages downloads the collected image URLs into a title-scoped output directory.
@@ -90,7 +97,8 @@ func DownloadImagesContext(ctx context.Context, summary CollectionSummary, image
 	usedNames := make(map[string]int, len(imageURLs))
 	var usedNamesMu sync.Mutex
 	var progressMu sync.Mutex
-	report := func(current int, phase, message string) {
+	startedAt := time.Now()
+	report := func(current int, phase, message string, bytes int64) {
 		if progress == nil {
 			return
 		}
@@ -99,19 +107,23 @@ func DownloadImagesContext(ctx context.Context, summary CollectionSummary, image
 		if total > 0 {
 			fraction = float64(current) / float64(total)
 		}
+		speed := bytesPerSecond(bytes, time.Since(startedAt))
 		progress(DownloadProgress{
-			Current:  current,
-			Total:    total,
-			Phase:    phase,
-			Message:  message,
-			Fraction: fraction,
+			Current:               current,
+			Total:                 total,
+			Phase:                 phase,
+			Message:               message,
+			Fraction:              fraction,
+			Bytes:                 bytes,
+			BytesPerSecond:        speed,
+			AverageBytesPerSecond: speed,
 		})
 	}
 
-	report(0, "downloading", "prepare")
+	report(0, "downloading", "prepare", 0)
 	workerCount := downloadWorkerCount(len(imageURLs))
 	log.Printf("asset download begin: site=%s images=%d workers=%d", summary.Site, len(imageURLs), workerCount)
-	httpClient, err := netproxy.NewHTTPClient(summary.ProxyServer, 0)
+	httpClient, err := netproxy.NewHTTPClient(summary.ProxyServer, imageDownloadTimeout)
 	if err != nil {
 		return DownloadResult{}, err
 	}
@@ -164,9 +176,10 @@ func DownloadImagesContext(ctx context.Context, summary CollectionSummary, image
 					totalBytes += written
 					completed++
 					current := completed
+					currentBytes := totalBytes
 					progressMu.Unlock()
 					log.Printf("asset download image done: site=%s worker=%d %d/%d file=%s bytes=%d", summary.Site, workerID, item.index+1, len(imageURLs), saved, written)
-					report(current, "downloading", fmt.Sprintf("%d/%d", current, len(imageURLs)))
+					report(current, "downloading", fmt.Sprintf("%d/%d", current, len(imageURLs)), currentBytes)
 				}
 			}
 		}()
@@ -190,13 +203,17 @@ func DownloadImagesContext(ctx context.Context, summary CollectionSummary, image
 	if err := ctx.Err(); err != nil {
 		return DownloadResult{}, err
 	}
-	report(len(imageURLs), "done", "download complete")
+	duration := time.Since(startedAt)
+	averageSpeed := bytesPerSecond(totalBytes, duration)
+	report(len(imageURLs), "done", "download complete", totalBytes)
 
 	log.Printf("asset download complete: site=%s files=%d bytes=%d dir=%s", summary.Site, len(files), totalBytes, chapterDir)
 	return DownloadResult{
-		OutputDir: chapterDir,
-		Files:     files,
-		Bytes:     totalBytes,
+		OutputDir:             chapterDir,
+		Files:                 files,
+		Bytes:                 totalBytes,
+		Duration:              duration,
+		AverageBytesPerSecond: averageSpeed,
 	}, nil
 }
 
@@ -228,6 +245,9 @@ func downloadOneImage(ctx context.Context, httpClient *http.Client, rawURL, outp
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", 0, fmt.Errorf("download image %q: unexpected status %s", rawURL, resp.Status)
 	}
+	if resp.ContentLength > maxImageDownloadBytes {
+		return "", 0, fmt.Errorf("download image %q: response too large: %d bytes > %d bytes", rawURL, resp.ContentLength, maxImageDownloadBytes)
+	}
 
 	baseName := strings.TrimSuffix(filepath.Base(parsed.Path), filepath.Ext(parsed.Path))
 	ext := sanitizeExt(filepath.Ext(parsed.Path))
@@ -246,17 +266,44 @@ func downloadOneImage(ctx context.Context, httpClient *http.Client, rawURL, outp
 	usedNamesMu.Unlock()
 	targetPath := filepath.Join(outputDir, filename)
 
-	file, err := os.Create(targetPath)
+	written, err := writeLimitedImageFile(targetPath, resp.Body, maxImageDownloadBytes)
 	if err != nil {
-		return "", 0, fmt.Errorf("create image file %q: %w", targetPath, err)
-	}
-	defer file.Close()
-
-	written, err := io.Copy(file, resp.Body)
-	if err != nil {
-		return "", 0, fmt.Errorf("write image file %q: %w", targetPath, err)
+		return "", 0, err
 	}
 	return targetPath, written, nil
+}
+
+func writeLimitedImageFile(targetPath string, body io.Reader, maxBytes int64) (int64, error) {
+	file, err := os.Create(targetPath)
+	if err != nil {
+		return 0, fmt.Errorf("create image file %q: %w", targetPath, err)
+	}
+	removePartial := false
+	defer func() {
+		_ = file.Close()
+		if removePartial {
+			_ = os.Remove(targetPath)
+		}
+	}()
+
+	limited := &io.LimitedReader{R: body, N: maxBytes + 1}
+	written, err := io.Copy(file, limited)
+	if err != nil {
+		removePartial = true
+		return written, fmt.Errorf("write image file %q: %w", targetPath, err)
+	}
+	if written > maxBytes {
+		removePartial = true
+		return written, fmt.Errorf("write image file %q: response too large: %d bytes > %d bytes", targetPath, written, maxBytes)
+	}
+	return written, nil
+}
+
+func bytesPerSecond(bytes int64, elapsed time.Duration) float64 {
+	if bytes <= 0 || elapsed <= 0 {
+		return 0
+	}
+	return float64(bytes) / elapsed.Seconds()
 }
 
 func downloadImageResponse(ctx context.Context, httpClient *http.Client, rawURL string, parsed *url.URL) (*http.Response, error) {

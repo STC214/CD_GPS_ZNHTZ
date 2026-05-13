@@ -77,3 +77,17 @@ func TestExecuteWithClientResolvesGalleryImageURLs(t *testing.T) {
 		t.Fatalf("CollectedImages = %#v, want %q", result.CollectedImages, want)
 	}
 }
+
+func TestGetTextRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", maxHitomiTextBytes+1))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	_, err := client.getText(context.Background(), server.URL)
+	if err == nil {
+		t.Fatal("getText() error = nil, want oversized response error")
+	}
+}

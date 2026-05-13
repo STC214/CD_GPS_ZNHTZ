@@ -543,18 +543,62 @@ func taskProgressLabel(item ui.TodoItem) string {
 	case item.Status == ui.TodoStatusFailed:
 		return "失败"
 	case item.Status == ui.TodoStatusCompleted && item.Result.DownloadedCount > 0:
-		return fmt.Sprintf("%d张", item.Result.DownloadedCount)
+		base := fmt.Sprintf("%d张", item.Result.DownloadedCount)
+		if avg := taskAverageSpeed(item); avg > 0 {
+			return base + " 平均 " + formatBytesPerSecond(avg)
+		}
+		return base
 	case item.StepTotal > 0 && item.StepCurrent > 0:
 		base := fmt.Sprintf("%d/%d", item.StepCurrent, item.StepTotal)
-		suffix := taskPhaseShort(item.Phase)
-		if suffix == "" {
-			return base
+		if speed := taskCurrentSpeed(item); speed > 0 && strings.EqualFold(strings.TrimSpace(item.Phase), "downloading") {
+			base += " " + formatBytesPerSecond(speed)
 		}
-		return base + " " + suffix
+		if suffix := taskPhaseShort(item.Phase); suffix != "" {
+			base += " " + suffix
+		}
+		return base
 	case strings.TrimSpace(item.Phase) != "":
 		return taskPhaseShort(item.Phase)
 	default:
 		return ""
+	}
+}
+
+func taskCurrentSpeed(item ui.TodoItem) float64 {
+	if item.StepBPS > 0 {
+		return item.StepBPS
+	}
+	return 0
+}
+
+func taskAverageSpeed(item ui.TodoItem) float64 {
+	if item.Result.DownloadAverageBPS > 0 {
+		return item.Result.DownloadAverageBPS
+	}
+	if item.AverageBPS > 0 {
+		return item.AverageBPS
+	}
+	return 0
+}
+
+func formatBytesPerSecond(bytesPerSecond float64) string {
+	if bytesPerSecond <= 0 {
+		return ""
+	}
+	units := []string{"B/s", "KB/s", "MB/s", "GB/s"}
+	value := bytesPerSecond
+	unit := units[0]
+	for i := 1; i < len(units) && value >= 1024; i++ {
+		value /= 1024
+		unit = units[i]
+	}
+	switch {
+	case value >= 100:
+		return fmt.Sprintf("%.0f %s", value, unit)
+	case value >= 10:
+		return fmt.Sprintf("%.1f %s", value, unit)
+	default:
+		return fmt.Sprintf("%.2f %s", value, unit)
 	}
 }
 

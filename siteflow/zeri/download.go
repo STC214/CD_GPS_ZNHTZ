@@ -17,11 +17,14 @@ import (
 
 // DownloadProgress reports the status of reader image downloads.
 type DownloadProgress struct {
-	Current  int     `json:"current"`
-	Total    int     `json:"total"`
-	Phase    string  `json:"phase,omitempty"`
-	Message  string  `json:"message,omitempty"`
-	Fraction float64 `json:"fraction"`
+	Current               int     `json:"current"`
+	Total                 int     `json:"total"`
+	Phase                 string  `json:"phase,omitempty"`
+	Message               string  `json:"message,omitempty"`
+	Fraction              float64 `json:"fraction"`
+	Bytes                 int64   `json:"bytes,omitempty"`
+	BytesPerSecond        float64 `json:"bytesPerSecond,omitempty"`
+	AverageBytesPerSecond float64 `json:"averageBytesPerSecond,omitempty"`
 }
 
 // DownloadProgressFunc receives download progress updates.

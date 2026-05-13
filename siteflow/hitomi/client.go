@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	defaultAPIBaseURL = "https://ltn.gold-usergeneratedcontent.net"
-	defaultCDNDomain  = "gold-usergeneratedcontent.net"
-	defaultFormatDir  = "webp"
+	defaultAPIBaseURL        = "https://ltn.gold-usergeneratedcontent.net"
+	defaultCDNDomain         = "gold-usergeneratedcontent.net"
+	defaultFormatDir         = "webp"
+	maxHitomiTextBytes int64 = 8 << 20
 )
 
 var hashPathRe = regexp.MustCompile(`/[0-9a-f]{61}([0-9a-f]{2})([0-9a-f])`)
@@ -291,9 +292,16 @@ func (c *Client) getText(ctx context.Context, rawURL string) (string, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("unexpected status %s", resp.Status)
 	}
-	data, err := io.ReadAll(resp.Body)
+	if resp.ContentLength > maxHitomiTextBytes {
+		return "", fmt.Errorf("response too large: %d bytes > %d bytes", resp.ContentLength, maxHitomiTextBytes)
+	}
+	limited := &io.LimitedReader{R: resp.Body, N: maxHitomiTextBytes + 1}
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return "", err
+	}
+	if int64(len(data)) > maxHitomiTextBytes {
+		return "", fmt.Errorf("response too large: %d bytes > %d bytes", len(data), maxHitomiTextBytes)
 	}
 	return string(data), nil
 }

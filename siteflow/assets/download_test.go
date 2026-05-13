@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +80,17 @@ func TestDownloadWorkerCount(t *testing.T) {
 func TestDownloadWorkerCountForHitomiTargetImages(t *testing.T) {
 	if got := downloadWorkerCount(40); got != 7 {
 		t.Fatalf("downloadWorkerCount(40) = %d, want 7", got)
+	}
+}
+
+func TestWriteLimitedImageFileRejectsOversizedBody(t *testing.T) {
+	targetPath := filepath.Join(t.TempDir(), "oversized.jpg")
+	_, err := writeLimitedImageFile(targetPath, strings.NewReader("abcdef"), 5)
+	if err == nil {
+		t.Fatal("writeLimitedImageFile() error = nil, want oversized error")
+	}
+	if _, statErr := os.Stat(targetPath); !os.IsNotExist(statErr) {
+		t.Fatalf("partial file stat error = %v, want not exist", statErr)
 	}
 }
 

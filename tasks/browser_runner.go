@@ -25,32 +25,33 @@ import (
 
 // BrowserRunResult is the task-layer outcome of opening a browser page.
 type BrowserRunResult struct {
-	URL                  string `json:"url"`
-	ResolvedURL          string `json:"resolvedURL,omitempty"`
-	Title                string `json:"title"`
-	BrowserType          string `json:"browserType,omitempty"`
-	BrowserPath          string `json:"browserPath,omitempty"`
-	BrowserMode          string `json:"browserMode,omitempty"`
-	Headless             bool   `json:"headless"`
-	KeepOpen             bool   `json:"keepOpen"`
-	PlaywrightProfileDir string `json:"playwrightProfileDir,omitempty"`
-	Site                 string `json:"site,omitempty"`
-	PageType             string `json:"pageType,omitempty"`
-	ReaderURL            string `json:"readerURL,omitempty"`
-	SummaryPageCount     int    `json:"summaryPageCount,omitempty"`
-	ReaderPageCount      int    `json:"readerPageCount,omitempty"`
-	ReaderImageCount     int    `json:"readerImageCount,omitempty"`
-	ReaderFilteredCount  int    `json:"readerFilteredCount,omitempty"`
-	ReaderActivation     int    `json:"readerActivationClicks,omitempty"`
-	Verified             bool   `json:"verified,omitempty"`
-	VerificationNeeded   bool   `json:"verificationNeeded,omitempty"`
-	Blocked              bool   `json:"blocked,omitempty"`
-	MatchedMarker        string `json:"matchedMarker,omitempty"`
-	Note                 string `json:"note,omitempty"`
-	DownloadedCount      int    `json:"downloadedCount,omitempty"`
-	DownloadedBytes      int64  `json:"downloadedBytes,omitempty"`
-	DownloadedDir        string `json:"downloadedDir,omitempty"`
-	ThumbnailPath        string `json:"thumbnailPath,omitempty"`
+	URL                  string  `json:"url"`
+	ResolvedURL          string  `json:"resolvedURL,omitempty"`
+	Title                string  `json:"title"`
+	BrowserType          string  `json:"browserType,omitempty"`
+	BrowserPath          string  `json:"browserPath,omitempty"`
+	BrowserMode          string  `json:"browserMode,omitempty"`
+	Headless             bool    `json:"headless"`
+	KeepOpen             bool    `json:"keepOpen"`
+	PlaywrightProfileDir string  `json:"playwrightProfileDir,omitempty"`
+	Site                 string  `json:"site,omitempty"`
+	PageType             string  `json:"pageType,omitempty"`
+	ReaderURL            string  `json:"readerURL,omitempty"`
+	SummaryPageCount     int     `json:"summaryPageCount,omitempty"`
+	ReaderPageCount      int     `json:"readerPageCount,omitempty"`
+	ReaderImageCount     int     `json:"readerImageCount,omitempty"`
+	ReaderFilteredCount  int     `json:"readerFilteredCount,omitempty"`
+	ReaderActivation     int     `json:"readerActivationClicks,omitempty"`
+	Verified             bool    `json:"verified,omitempty"`
+	VerificationNeeded   bool    `json:"verificationNeeded,omitempty"`
+	Blocked              bool    `json:"blocked,omitempty"`
+	MatchedMarker        string  `json:"matchedMarker,omitempty"`
+	Note                 string  `json:"note,omitempty"`
+	DownloadedCount      int     `json:"downloadedCount,omitempty"`
+	DownloadedBytes      int64   `json:"downloadedBytes,omitempty"`
+	DownloadAverageBPS   float64 `json:"downloadAverageBps,omitempty"`
+	DownloadedDir        string  `json:"downloadedDir,omitempty"`
+	ThumbnailPath        string  `json:"thumbnailPath,omitempty"`
 }
 
 // RunBrowserRequest opens the page described by the request and returns a normalized result.
@@ -281,6 +282,7 @@ func RunBrowserRequest(req BrowserLaunchRequest) (BrowserRunResult, error) {
 		Note:                 "",
 		DownloadedCount:      len(downloadResult.Files),
 		DownloadedBytes:      downloadResult.Bytes,
+		DownloadAverageBPS:   downloadResult.AverageBytesPerSecond,
 		DownloadedDir:        downloadResult.OutputDir,
 		ThumbnailPath:        thumbnailPath,
 	}, nil
@@ -343,6 +345,7 @@ func runHitomiRequest(ctx context.Context, req BrowserLaunchRequest, runtimePath
 		Blocked:             false,
 		DownloadedCount:     len(downloadResult.Files),
 		DownloadedBytes:     downloadResult.Bytes,
+		DownloadAverageBPS:  downloadResult.AverageBytesPerSecond,
 		DownloadedDir:       downloadResult.OutputDir,
 		ThumbnailPath:       thumbnailPath,
 	}, nil
@@ -411,11 +414,14 @@ func assetProgressSpan(cb func(zeri.DownloadProgress), start, span float64) asse
 			update.Fraction = 1
 		}
 		cb(zeri.DownloadProgress{
-			Current:  update.Current,
-			Total:    update.Total,
-			Phase:    update.Phase,
-			Message:  update.Message,
-			Fraction: start + span*update.Fraction,
+			Current:               update.Current,
+			Total:                 update.Total,
+			Phase:                 update.Phase,
+			Message:               update.Message,
+			Fraction:              start + span*update.Fraction,
+			Bytes:                 update.Bytes,
+			BytesPerSecond:        update.BytesPerSecond,
+			AverageBytesPerSecond: update.AverageBytesPerSecond,
 		})
 	}
 }

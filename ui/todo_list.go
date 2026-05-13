@@ -41,6 +41,9 @@ type TodoItem struct {
 	StepCurrent int                        `json:"stepCurrent,omitempty"`
 	StepTotal   int                        `json:"stepTotal,omitempty"`
 	StepMessage string                     `json:"stepMessage,omitempty"`
+	StepBytes   int64                      `json:"stepBytes,omitempty"`
+	StepBPS     float64                    `json:"stepBps,omitempty"`
+	AverageBPS  float64                    `json:"averageBps,omitempty"`
 	CreatedAt   time.Time                  `json:"createdAt"`
 	StartedAt   time.Time                  `json:"startedAt"`
 	FinishedAt  time.Time                  `json:"finishedAt"`
@@ -551,6 +554,9 @@ func (l *TodoList) RunImmediately(req tasks.BrowserLaunchRequest, runner TodoRun
 	item.StepCurrent = item.StepTotal
 	item.StepMessage = "completed"
 	item.Result = result
+	item.StepBytes = result.DownloadedBytes
+	item.StepBPS = 0
+	item.AverageBPS = result.DownloadAverageBPS
 	item.LastError = ""
 	l.items[index] = item
 	l.mu.Unlock()
@@ -695,6 +701,9 @@ func (l *TodoList) runPendingItem(itemID string, runner TodoRunner) (TodoItem, e
 	item.StepCurrent = 0
 	item.StepTotal = 0
 	item.StepMessage = ""
+	item.StepBytes = 0
+	item.StepBPS = 0
+	item.AverageBPS = 0
 	l.items[index] = item
 	notifier := l.notifier
 	l.mu.Unlock()
@@ -777,6 +786,9 @@ func (l *TodoList) runPendingItem(itemID string, runner TodoRunner) (TodoItem, e
 	item.StepCurrent = item.StepTotal
 	item.StepMessage = "completed"
 	item.Result = result
+	item.StepBytes = result.DownloadedBytes
+	item.StepBPS = 0
+	item.AverageBPS = result.DownloadAverageBPS
 	item.LastError = ""
 	l.items[index] = item
 	l.mu.Unlock()
@@ -808,6 +820,9 @@ func (l *TodoList) runExistingItem(itemID string, runner TodoRunner) (TodoItem, 
 	item.StepMessage = ""
 	item.LastError = ""
 	item.Result = tasks.BrowserRunResult{}
+	item.StepBytes = 0
+	item.StepBPS = 0
+	item.AverageBPS = 0
 	l.items[index] = item
 	notifier := l.notifier
 	l.mu.Unlock()
@@ -890,6 +905,9 @@ func (l *TodoList) runExistingItem(itemID string, runner TodoRunner) (TodoItem, 
 	item.StepCurrent = item.StepTotal
 	item.StepMessage = "completed"
 	item.Result = result
+	item.StepBytes = result.DownloadedBytes
+	item.StepBPS = 0
+	item.AverageBPS = result.DownloadAverageBPS
 	item.LastError = ""
 	l.items[index] = item
 	l.mu.Unlock()
@@ -1052,6 +1070,15 @@ func (l *TodoList) makeProgressUpdater(itemID string) func(zeri.DownloadProgress
 		}
 		if strings.TrimSpace(update.Message) != "" {
 			item.StepMessage = update.Message
+		}
+		if update.Bytes > 0 {
+			item.StepBytes = update.Bytes
+		}
+		if update.BytesPerSecond > 0 {
+			item.StepBPS = update.BytesPerSecond
+		}
+		if update.AverageBytesPerSecond > 0 {
+			item.AverageBPS = update.AverageBytesPerSecond
 		}
 		l.items[index] = item
 		notifier := l.notifier
